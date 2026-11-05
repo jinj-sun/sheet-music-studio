@@ -1,0 +1,13 @@
+{"cases":[
+  {"id":1,"priority":"p0","description":"打开首页，预期显示钢琴谱识别工具标题和上传区域"},
+  {"id":2,"priority":"p0","description":"拖拽上传一张乐谱图片，预期原图预览区显示图片且开始识别按钮可用"},
+  {"id":3,"priority":"p1","description":"点击开始识别，预期进入识别进度页并显示各阶段进度"},
+  {"id":4,"priority":"p1","description":"识别完成后，预期进入编辑页，显示乐谱视图且可切换到 XML 源码和原图对照 Tab"},
+  {"id":5,"priority":"p1","description":"在编辑页点击导出 MusicXML，预期触发文件下载"},
+  {"id":6,"priority":"p2","description":"在编辑页点击导出 MIDI，预期触发文件下载"},
+  {"id":7,"priority":"p0","description":"识别进行中，预期后端类型显示为 wasm 且无 fp16 模型加载错误"},
+  {"id":8,"priority":"p0","description":"识别过程中所有 fp32 模型请求返回 200，无任何模型 404 错误"},
+  {"id":9,"priority":"p0","description":"点击加载示例乐谱，预期进入编辑页且播放控件可见（播放/暂停/停止按钮、进度条、速度和音量调节）"},
+  {"id":10,"priority":"p0","description":"点击播放按钮，预期按钮变为暂停状态且播放进度推进，播放中光标可见"},
+  {"id":11,"priority":"p1","description":"播放中点击暂停，预期播放停止且按钮恢复为播放状态；再点击播放，预期从暂停处继续"}
+]}
