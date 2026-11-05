@@ -25,9 +25,13 @@ import {
   ZoomOut,
   Save,
   ChevronRight,
+  Trash2,
+  RotateCcw,
 } from 'lucide-react';
 import ScoreView from './components/ScoreView';
 import NoteInspector from './components/NoteInspector';
+import PageQueue from './components/PageQueue';
+import NoteStrip from './components/NoteStrip';
 import { parseScore, noteLabel } from './music/score';
 import { appendMeasure, createPianoScore, deleteNote } from './music/editor';
 import {
@@ -52,17 +56,28 @@ import {
   parseProject,
   listProjects,
   saveProject,
+  setProjectTrashed,
   type StudioProject,
 } from './storage/projects';
 import {
   OmrRecognizer,
   checkModels,
   probeOmrRuntime,
-  OMR_ERRORS,
+  requireModels,
   type ModelStatus,
-  type Progress,
 } from './omr/recognizer';
 import { SAMPLE_MUSICXML } from './utils/sampleMusicXml';
+import {
+  projectPages,
+  pageXml,
+  MAX_PAGES,
+  MAX_PAGE_IMAGE_CHARS,
+  validatePageData,
+  type ProjectPage,
+} from './storage/pages';
+import { recognizePages, type BatchProgress } from './omr/batch';
+import { mergeRecognizedPages } from './omr/merge-pages';
+
 type View = 'score' | 'compare' | 'xml';
 const STAGES: Record<string, string> = {
   models: '下载并校验模型',
@@ -86,6 +101,13 @@ export default function Studio() {
     'workbench',
   );
   const [view, setView] = useState<View>('score');
+  const [showTrash, setShowTrash] = useState(false);
+  const [trashBusy, setTrashBusy] = useState(false);
+  const [pageId, setPageId] = useState('');
+  const [scoreJump, setScoreJump] = useState<{ measure: number } | null>(null);
+  const imageViewport = useRef<HTMLDivElement>(null);
+  const newImageTask = useRef(false);
+  const readingImages = useRef(false);
   const [selected, setSelected] = useState('');
   const [zoom, setZoom] = useState(1),
     [imageZoom, setImageZoom] = useState(1);
@@ -101,7 +123,7 @@ export default function Studio() {
   const [followPlayback, setFollowPlayback] = useState(true);
   const [approximate, setApproximate] = useState(false);
   const [busy, setBusy] = useState(false),
-    [progress, setProgress] = useState<Progress | null>(null);
+    [progress, setProgress] = useState<BatchProgress | null>(null);
   const [statuses, setStatuses] = useState<ModelStatus[] | null>(null),
     [checking, setChecking] = useState(false);
   const [focusedBox, setFocusedBox] = useState(-1);
@@ -126,9 +148,111 @@ export default function Studio() {
     [score],
   );
   const note = score?.notes.find((n) => n.id === selected);
-  const image = project?.image;
+  const pages = useMemo(() => projectPages(project), [project]);
+  const pageIndex = Math.max(
+    0,
+    pages.findIndex((p) => p.id === pageId),
+  );
+  const page = pages[pageIndex];
+  const image = page?.image;
+  const successfulPages = pages.filter((p) => pageXml(p)).length;
+  const canReorder = !pages.some((p) => p.range);
+  const recognizeLabel =
+    pages.length <= 1
+      ? '识别为新项目'
+      : successfulPages === pages.length
+        ? `合并 ${pages.length} 页为新项目`
+        : successfulPages
+          ? `继续识别剩余 ${pages.length - successfulPages} 页`
+          : `识别全部 ${pages.length} 页`;
+  const mappedPages = useMemo(() => {
+    const mapped = pages
+      .filter((p) => p.range)
+      .sort((a, b) => a.range!.start - b.range!.start);
+    const measures = score?.parts[0]?.measures;
+    let end = 0;
+    for (const p of mapped) {
+      if (p.range!.start !== end) return [];
+      end += p.range!.count;
+    }
+    return measures?.length === end &&
+      measures.every((m, i) => m.number === String(i + 1))
+      ? mapped
+      : [];
+  }, [pages, score]);
+  const visibleProjects = projects.filter(
+    (p) => Boolean(p.trashedAt) === showTrash,
+  );
+  const trashCount =
+    projects.length - projects.filter((p) => !p.trashedAt).length;
+  const stripNotes = useMemo(() => {
+    const range =
+      view === 'compare' && page && mappedPages.includes(page)
+        ? page.range
+        : undefined;
+    if (!score) return [];
+    return range
+      ? score.notes.filter(
+          (n) =>
+            n.measureIndex >= range.start &&
+            n.measureIndex < range.start + range.count,
+        )
+      : score.notes;
+  }, [score, view, page, mappedPages]);
+  const selectScoreNote = useCallback(
+    (id: string) => {
+      setSelected(id);
+      const n = score?.notes.find((n) => n.id === id);
+      const target =
+        n &&
+        mappedPages.find(
+          (p) =>
+            n.measureIndex >= p.range!.start &&
+            n.measureIndex < p.range!.start + p.range!.count,
+        );
+      if (target) setPageId(target.id);
+    },
+    [score, mappedPages],
+  );
+  function selectPage(index: number) {
+    const p = pages[index];
+    if (!p) return;
+    setPageId(p.id);
+    if (p.range && mappedPages.includes(p)) {
+      const first = score?.notes.find((n) => n.measureIndex === p.range!.start);
+      if (first) setSelected(first.id);
+      setScoreJump({ measure: p.range.start });
+    }
+  }
+  useEffect(() => {
+    setFocusedBox(-1);
+    if (imageViewport.current) {
+      imageViewport.current.scrollTop = 0;
+      imageViewport.current.scrollLeft = 0;
+    }
+  }, [page?.id, project?.id]);
+  useEffect(() => {
+    if (
+      !playing ||
+      !followPlayback ||
+      view !== 'compare' ||
+      !mappedPages.length
+    )
+      return;
+    const m = score?.parts[0]?.measures.find(
+      (m) => beat >= m.start && beat < m.start + m.duration,
+    );
+    const target =
+      m &&
+      mappedPages.find(
+        (p) =>
+          m.index >= p.range!.start &&
+          m.index < p.range!.start + p.range!.count,
+      );
+    if (target) setPageId(target.id);
+  }, [playing, followPlayback, view, mappedPages, score, beat]);
   const staves = useMemo(() => {
-    const value = project?.recognition?.staves;
+    const value = page?.recognition?.staves;
     return Array.isArray(value)
       ? value.filter(
           (b: unknown): b is { cx: number; cy: number; w: number; h: number } =>
@@ -139,7 +263,7 @@ export default function Studio() {
             ),
         )
       : [];
-  }, [project?.recognition]);
+  }, [page?.recognition]);
   const fail = useCallback((e: unknown) => {
     setError(message(e));
     setNotice('');
@@ -156,7 +280,10 @@ export default function Studio() {
       setProject(p);
       setHistory(createHistory(p.xml));
       setSelected(p.xml ? parseScore(p.xml).notes[0]?.id || '' : '');
-      setView(p.image ? 'compare' : 'score');
+      const firstPage = projectPages(p)[0];
+      setPageId(firstPage?.id || '');
+      setScoreJump(null);
+      setView(firstPage ? 'compare' : 'score');
       setScreen('workbench');
       setError('');
       setNotice('');
@@ -174,7 +301,8 @@ export default function Studio() {
             ...current,
             ...list.filter((p) => !current.some((c) => c.id === p.id)),
           ]);
-          if (!active.current && list[0]) load(list[0]);
+          const first = list.find((p) => !p.trashedAt);
+          if (!active.current && first) load(first);
         }
       })
       .catch(fail);
@@ -263,7 +391,7 @@ export default function Studio() {
     );
   };
   async function activate(p: StudioProject) {
-    if (busy) return false;
+    if (busy || trashBusy || p.trashedAt) return false;
     try {
       if (active.current) await saveProject(active.current);
       load(p);
@@ -367,68 +495,184 @@ export default function Studio() {
       fail(e);
     }
   }
-  async function uploadImage(file: File) {
-    if (busy) return;
+  async function uploadImages(files: File[], fresh = false) {
+    if (busy || readingImages.current || !files.length) return;
+    readingImages.current = true;
     try {
-      const targetId = active.current?.id;
-      const dataUrl = await imageDataUrl(file);
-      if (active.current?.id !== targetId)
+      const target = active.current,
+        existing = fresh ? [] : projectPages(target);
+      const input = [...files].sort((a, b) =>
+        new Intl.Collator('zh-CN', {
+          numeric: true,
+          sensitivity: 'base',
+        }).compare(a.name, b.name),
+      );
+      if (existing.length + input.length > MAX_PAGES)
+        throw new Error(`每个项目最多 ${MAX_PAGES} 张图片，请分批处理`);
+      if (
+        existing.reduce((sum, p) => sum + p.image.dataUrl.length, 0) +
+          input.reduce((sum, f) => sum + Math.ceil(f.size / 3) * 4 + 64, 0) >
+        MAX_PAGE_IMAGE_CHARS
+      )
+        throw new Error('原图总大小超过约 80 MB，请缩小图片或拆分项目');
+      const added: ProjectPage[] = [];
+      for (const file of input) {
+        try {
+          added.push({
+            id: crypto.randomUUID(),
+            image: { name: file.name, dataUrl: await imageDataUrl(file) },
+          });
+        } catch (e) {
+          throw new Error(
+            `${file.name}：${message(e)}。本批图片未添加，原项目保留。`,
+          );
+        }
+      }
+      if (active.current?.id !== target?.id)
         throw new Error('图片读取期间项目已切换，请重新选择图片');
-      if (project)
-        update({ image: { name: file.name, dataUrl }, recognition: undefined });
+      const next = [...existing, ...added];
+      validatePageData(next);
+      if (target && !fresh)
+        update({ pages: next, image: undefined, recognition: undefined });
       else if (
         !(await activate({
-          ...newProject('', file.name.replace(/\.[^.]+$/, '')),
-          image: { name: file.name, dataUrl },
+          ...newProject('', input[0].name.replace(/\.[^.]+$/, '')),
+          pages: next,
         }))
       )
         return;
+      setPageId(added[0].id);
       setView('compare');
       setScreen('workbench');
-      setNotice('原图已保存。可识别为新项目，或与现有谱面并排校对。');
+      setNotice(
+        next.length === 1
+          ? '原图已保存。可继续添加图片页，或识别为新项目。'
+          : `已保存 ${next.length} 页原图。请确认页序，再识别整首曲子。`,
+      );
       setError('');
+    } catch (e) {
+      fail(e);
+    } finally {
+      readingImages.current = false;
+    }
+  }
+  function movePage(delta: number) {
+    const nextIndex = pageIndex + delta;
+    if (!canReorder || busy || nextIndex < 0 || nextIndex >= pages.length)
+      return;
+    const next = [...pages];
+    [next[pageIndex], next[nextIndex]] = [next[nextIndex], next[pageIndex]];
+    update({ pages: next, image: undefined, recognition: undefined });
+    setPageId(page.id);
+  }
+  async function openPageScore() {
+    const xml = pageXml(page);
+    if (!xml) return;
+    try {
+      if (
+        await activate({
+          ...newProject(xml, `${project!.title} · 第 ${pageIndex + 1} 页`),
+          image: page.image,
+          recognition: page.recognition,
+        })
+      )
+        setNotice('已打开本页独立乐谱，原项目及其他页仍保留');
     } catch (e) {
       fail(e);
     }
   }
+  function downloadPageScore() {
+    const xml = page?.recognition?.musicXml;
+    if (typeof xml === 'string' && xml)
+      download(
+        xml,
+        `${project?.title || '乐谱'}-第${pageIndex + 1}页.musicxml`,
+        'application/xml',
+      );
+  }
   async function recognize() {
-    if (!project?.image || busy) return;
-    const original = project;
+    if (
+      !project ||
+      !pages.length ||
+      busy ||
+      controller.current ||
+      readingImages.current
+    )
+      return;
+    let working = project;
     const abort = new AbortController();
     controller.current = abort;
+    stop();
     setBusy(true);
     setError('');
-    setProgress({ stage: 'models', done: 0, total: 0 });
+    setNotice('');
+    setProgress({
+      page: Math.max(1, pages.findIndex((p) => !pageXml(p)) + 1),
+      totalPages: pages.length,
+      stage: { stage: 'models', done: 0, total: 0 },
+    });
     try {
-      await saveProject(original);
-      const blob = await (await fetch(original.image!.dataUrl)).blob();
-      const result = await omr.current.recognize(
-        blob,
-        (p) => {
-          if (!abort.signal.aborted) setProgress(p);
-        },
+      await saveProject(working);
+      if (pages.some((p) => !pageXml(p))) await requireModels(abort.signal);
+      const results = await recognizePages(
+        pages,
+        (blob, onProgress, signal) =>
+          omr.current.recognize(blob, onProgress, signal, true),
         abort.signal,
+        {
+          onProgress: (p) => {
+            setProgress(p);
+            setPageId(pages[p.page - 1].id);
+          },
+          onPage: async (next) => {
+            working = {
+              ...working,
+              pages: next,
+              image: undefined,
+              recognition: undefined,
+              updatedAt: Math.max(Date.now(), working.updatedAt + 1),
+            };
+            setProject(working);
+            await saveProject(working);
+          },
+        },
       );
       abort.signal.throwIfAborted();
-      if (!result.ok) {
-        update({ recognition: JSON.parse(JSON.stringify(result)) });
+      const missing = results.findIndex((p) => !pageXml(p));
+      if (missing >= 0) {
+        setPageId(results[missing].id);
         throw new Error(
-          `${OMR_ERRORS[result.error] || result.error}${result.log ? `：${result.log}` : ''}`,
+          `第 ${missing + 1} 页未成功：${results[missing].error || '未完成识别'}。已保留 ${results.filter((p) => pageXml(p)).length}/${results.length} 页成功结果；可继续重试或打开、下载已识别页。`,
         );
       }
-      parseScore(result.musicXml);
-      const p = {
-        ...newProject(result.musicXml),
-        image: original.image,
-        recognition: JSON.parse(JSON.stringify(result)),
-      };
+      const merged = mergeRecognizedPages(results.map((p) => pageXml(p)!));
+      const fresh = newProject(
+        merged.xml,
+        results.length > 1
+          ? `${working.title} · ${results.length} 页合谱`
+          : undefined,
+      );
+      const p: StudioProject =
+        results.length === 1
+          ? {
+              ...fresh,
+              image: results[0].image,
+              recognition: results[0].recognition,
+            }
+          : {
+              ...fresh,
+              pages: results.map((p, i) => ({ ...p, range: merged.ranges[i] })),
+            };
       load(p);
       setView('compare');
       setNotice(
-        '识别结果已建立为新项目。原图已保留，请逐音符校对；识别结果不代表已核验正确。',
+        results.length === 1
+          ? '识别结果已建立为新项目。原图已保留，请逐音符校对；识别结果不代表已核验正确。'
+          : `识别结果已建立为新项目：${results.length} 页已按页序合谱。逐页原图与原始 XML 均保留；总谱使用第一页页眉。`,
       );
     } catch (e) {
-      if (abort.signal.aborted) setNotice('识别已取消，原图与现有谱面已保留');
+      if (abort.signal.aborted)
+        setNotice('识别已取消，原图、已识别页及现有谱面已保留');
       else fail(e);
     } finally {
       if (controller.current === abort) {
@@ -436,6 +680,36 @@ export default function Studio() {
         setBusy(false);
         setProgress(null);
       }
+    }
+  }
+  async function changeTrash(p: StudioProject, trashed: boolean) {
+    if (busy || trashBusy) return;
+    setTrashBusy(true);
+    try {
+      if (active.current?.id === p.id) await saveProject(active.current);
+      const updated = await setProjectTrashed(p.id, trashed);
+      setProjects((items) =>
+        items.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      if (trashed && active.current?.id === p.id) {
+        stop();
+        active.current = null;
+        setProject(null);
+        setHistory(null);
+        setSelected('');
+        setPageId('');
+        setScoreJump(null);
+      }
+      setError('');
+      setNotice(
+        trashed
+          ? `“${p.title}”已移到废纸篓，可在项目库恢复。`
+          : `“${p.title}”已恢复到项目库。`,
+      );
+    } catch (e) {
+      fail(e);
+    } finally {
+      setTrashBusy(false);
     }
   }
   async function inspectModels() {
@@ -537,8 +811,23 @@ export default function Studio() {
   const sample = () => {
     void activate(newProject(SAMPLE_MUSICXML, '小星星 · 示例乐谱'));
   };
-  const picker = (kind: 'file' | 'image') =>
+  const picker = (kind: 'file' | 'image', fresh = false) => {
+    if (kind === 'image') newImageTask.current = fresh;
     (kind === 'file' ? fileInput : imageInput).current?.click();
+  };
+  const pageQueue = image && (
+    <PageQueue
+      pages={pages}
+      index={pageIndex}
+      busy={busy}
+      canReorder={canReorder}
+      onSelect={selectPage}
+      onMove={movePage}
+      onAdd={() => picker('image')}
+      onOpen={() => void openPageScore()}
+      onDownload={downloadPageScore}
+    />
+  );
 
   return (
     <div
@@ -546,11 +835,12 @@ export default function Studio() {
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
         e.preventDefault();
-        const file = e.dataTransfer.files[0];
-        if (file) {
-          if (file.type.startsWith('image/')) void uploadImage(file);
-          else void importFile(file);
-        }
+        const files = Array.from(e.dataTransfer.files);
+        if (!files.length) return;
+        if (files.every((f) => f.type.startsWith('image/')))
+          void uploadImages(files);
+        else if (files.length === 1) void importFile(files[0]);
+        else fail('请一次拖入同一曲子的图片页，或单独导入一个乐谱/项目文件');
       }}
     >
       <input
@@ -571,10 +861,13 @@ export default function Studio() {
         hidden
         type="file"
         accept="image/png,image/jpeg,image/webp"
+        multiple
         onChange={(e) => {
-          const f = e.target.files?.[0];
+          const files = Array.from(e.target.files || []),
+            fresh = newImageTask.current;
+          newImageTask.current = false;
           e.target.value = '';
-          if (f) void uploadImage(f);
+          if (files.length) void uploadImages(files, fresh);
         }}
       />
       <header className="app-header">
@@ -696,8 +989,8 @@ export default function Studio() {
           </button>
           <button
             aria-label="图片识谱"
-            title="上传原图"
-            onClick={() => picker('image')}
+            title="新建图片识谱项目（可多选）"
+            onClick={() => picker('image', true)}
             disabled={busy}
           >
             <ScanLine />
@@ -796,8 +1089,8 @@ export default function Studio() {
                 </p>
                 <p className="small">
                   支持 PNG、JPEG、WebP；PDF、TIFF、HEIC
-                  请先转换。多页乐谱目前逐页识别。首次初始化需加载 OpenCV 与
-                  ONNX WASM，单线程速度取决于设备。
+                  请先转换。可多选图片、确认页序，再批量识别与合谱。首次初始化需加载
+                  OpenCV 与 ONNX WASM，单线程速度取决于设备。
                 </p>
                 <a
                   href="https://github.com/jymen/homr-web"
@@ -826,34 +1119,89 @@ export default function Studio() {
                   导入 MusicXML / MXL / 项目
                 </button>
               </div>
+              <div className="library-tabs" aria-label="项目列表视图">
+                <button
+                  type="button"
+                  aria-pressed={!showTrash}
+                  onClick={() => setShowTrash(false)}
+                >
+                  我的项目
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={showTrash}
+                  onClick={() => setShowTrash(true)}
+                >
+                  <Trash2 size={15} />
+                  废纸篓（{trashCount}）
+                </button>
+              </div>
               <div className="project-grid">
-                {projects.map((p) => (
-                  <button
-                    className="project-card"
-                    key={p.id}
-                    onClick={() => void activate(p)}
-                    disabled={busy}
-                  >
-                    <div className="project-preview">
-                      {p.image ? (
-                        <img src={p.image.dataUrl} alt="" />
-                      ) : (
-                        <Music2 size={52} />
-                      )}
-                    </div>
-                    <strong>{p.title}</strong>
-                    <span>
-                      {p.xml ? 'MusicXML 乐谱' : '待识别原图'} ·{' '}
-                      {new Date(p.updatedAt).toLocaleString('zh-CN')}
-                    </span>
-                    <small>
-                      打开项目 <ChevronRight size={13} />
-                    </small>
-                  </button>
-                ))}
-                {!projects.length && (
+                {visibleProjects.map((p) => {
+                  const images = projectPages(p);
+                  return (
+                    <article className="project-tile" key={p.id}>
+                      <button
+                        className="project-card"
+                        onClick={() => void activate(p)}
+                        disabled={busy || trashBusy || showTrash}
+                      >
+                        <div className="project-preview">
+                          {images[0] ? (
+                            <img src={images[0].image.dataUrl} alt="" />
+                          ) : (
+                            <Music2 size={52} />
+                          )}
+                        </div>
+                        <strong>{p.title}</strong>
+                        <span>
+                          {p.xml ? 'MusicXML 乐谱' : '待合谱原图'}
+                          {images.length > 0 && ` · ${images.length} 页`} ·{' '}
+                          {new Date(p.updatedAt).toLocaleString('zh-CN')}
+                        </span>
+                        <small>
+                          {showTrash ? (
+                            '已移到废纸篓'
+                          ) : (
+                            <>
+                              打开项目 <ChevronRight size={13} />
+                            </>
+                          )}
+                        </small>
+                      </button>
+                      <div className="project-actions">
+                        {showTrash ? (
+                          <button
+                            type="button"
+                            aria-label={`恢复项目 ${p.title}`}
+                            disabled={busy || trashBusy}
+                            onClick={() => void changeTrash(p, false)}
+                          >
+                            <RotateCcw size={14} />
+                            恢复项目
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="danger"
+                            aria-label={`删除项目 ${p.title}`}
+                            title="移到废纸篓，可恢复"
+                            disabled={busy || trashBusy}
+                            onClick={() => void changeTrash(p, true)}
+                          >
+                            <Trash2 size={14} />
+                            删除项目
+                          </button>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
+                {!visibleProjects.length && (
                   <p className="muted">
-                    还没有项目。新建一份乐谱，或导入你的作品。
+                    {showTrash
+                      ? '废纸篓为空。删除的项目会显示在这里，可随时恢复。'
+                      : '还没有项目。新建一份乐谱，或导入你的作品。'}
                   </p>
                 )}
               </div>
@@ -893,7 +1241,7 @@ export default function Studio() {
                   <button onClick={() => picker('image')}>
                     <ScanLine size={20} />
                     <span>
-                      上传乐谱图片<small>识别 · 并排校对 · 逐音符修正</small>
+                      上传乐谱图片<small>多页识别 · 按序合谱 · 并排校对</small>
                     </span>
                   </button>
                 </div>
@@ -1009,9 +1357,12 @@ export default function Studio() {
                       disabled={busy}
                     >
                       <ScanLine size={15} />
-                      识别为新项目
+                      {recognizeLabel}
                     </button>
-                    <p className="hint">保留当前项目，识别后在新项目中校对。</p>
+                    {view !== 'compare' && pageQueue}
+                    <p className="hint">
+                      按各页原始识别合谱；当前乐谱编辑保持原样。
+                    </p>
                   </>
                 )}
                 <div className="resource-section">
@@ -1030,7 +1381,7 @@ export default function Studio() {
                           const target = score.notes.find(
                             (n) => n.measureIndex === m.index,
                           );
-                          if (target) setSelected(target.id);
+                          if (target) selectScoreNote(target.id);
                         }}
                       >
                         {m.number}
@@ -1167,19 +1518,23 @@ export default function Studio() {
                     <span className="spinner" />
                     <div>
                       <strong>
-                        {STAGES[progress?.stage || 'models'] || progress?.stage}
+                        {progress &&
+                          progress.totalPages > 1 &&
+                          `第 ${progress.page}/${progress.totalPages} 页 · `}
+                        {STAGES[progress?.stage.stage || 'models'] ||
+                          progress?.stage.stage}
                       </strong>
                       <progress
                         value={
-                          progress?.total
-                            ? progress.done / progress.total
+                          progress?.stage.total
+                            ? progress.stage.done / progress.stage.total
                             : undefined
                         }
                         max={1}
                       />
                       <small>
-                        {progress?.total
-                          ? `${Math.round((progress.done / progress.total) * 100)}% · 当前阶段`
+                        {progress?.stage.total
+                          ? `${Math.round((progress.stage.done / progress.stage.total) * 100)}% · 当前阶段`
                           : '正在准备识谱环境…'}
                       </small>
                     </div>
@@ -1274,7 +1629,7 @@ export default function Studio() {
                               onClick={() => void recognize()}
                             >
                               <ScanLine size={13} />
-                              识别为新项目
+                              {recognizeLabel}
                             </button>
                           )}
                           <div>
@@ -1297,7 +1652,8 @@ export default function Studio() {
                             </button>
                           </div>
                         </div>
-                        <div className="image-viewport">
+                        {pageQueue}
+                        <div className="image-viewport" ref={imageViewport}>
                           {image ? (
                             <div
                               className="image-scale"
@@ -1355,7 +1711,8 @@ export default function Studio() {
                             beat={playing ? beat : null}
                             checked={project.checked}
                             followPlayback={followPlayback}
-                            onSelect={setSelected}
+                            jump={scoreJump}
+                            onSelect={selectScoreNote}
                           />
                         ) : (
                           <div className="empty-score">
@@ -1382,34 +1739,12 @@ export default function Studio() {
                         可使用属性面板的前后按钮。和弦中的每个音可独立选择。
                       </span>
                     </div>
-                    <div className="note-strip">
-                      {score.notes.map((n) => (
-                        <button
-                          key={n.id}
-                          className={`${selected === n.id ? 'active' : ''} ${project.checked.includes(n.id) ? 'checked' : ''}`}
-                          aria-label={`选择 ${noteLabel(n)} 小节${n.measureIndex + 1} 谱表${n.staff} 声部${n.voice} 第${n.noteIndex + 1}音`}
-                          onClick={() => setSelected(n.id)}
-                        >
-                          <small>
-                            {n.measureIndex + 1}:
-                            {Number((n.onset + 1).toFixed(3))} ·{' '}
-                            {n.staff === 1
-                              ? 'R'
-                              : n.staff === 2
-                                ? 'L'
-                                : n.staff}
-                            v{n.voice}
-                          </small>
-                          <strong>
-                            {noteLabel(n)}
-                            {n.chord ? ' ◇' : ''}
-                          </strong>
-                          {project.checked.includes(n.id) && (
-                            <CheckCircle2 size={11} />
-                          )}
-                        </button>
-                      ))}
-                    </div>
+                    <NoteStrip
+                      notes={stripNotes}
+                      selected={selected}
+                      checked={project.checked}
+                      onSelect={selectScoreNote}
+                    />
                   </div>
                 )}
               </main>
@@ -1421,7 +1756,7 @@ export default function Studio() {
                   disabled={busy}
                   checked={project.checked}
                   insertOpen={insertOpen}
-                  onSelect={setSelected}
+                  onSelect={selectScoreNote}
                   onCommand={command}
                   onCheck={(id) =>
                     update({

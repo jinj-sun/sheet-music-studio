@@ -12,6 +12,7 @@ import {
   newProject,
   parseProject,
   saveProject,
+  setProjectTrashed,
   listProjects,
 } from '../../client/src/storage/projects';
 import { createPianoScore, changePitch } from '../../client/src/music/editor';
@@ -121,4 +122,39 @@ it('ignores stale autosaves instead of overwriting a newer snapshot', async () =
   await saveProject({ ...p, title: 'new', updatedAt: 200 });
   await saveProject({ ...p, title: 'old', updatedAt: 100 });
   expect((await listProjects())[0].title).toBe('new');
+});
+it('deletes to trash and restores every field without a delayed save resurrecting the project', async () => {
+  const p = {
+    ...newProject(xml),
+    draft: '<draft>',
+    pages: [
+      {
+        id: 'a',
+        image: {
+          name: 'original.png',
+          dataUrl: 'data:image/png;base64,iVBORw==',
+        },
+        recognition: { ok: true, musicXml: xml },
+      },
+    ],
+  };
+  await saveProject(p);
+  const trashed = await setProjectTrashed(p.id, true);
+  expect(trashed.trashedAt).toBeGreaterThan(0);
+  await saveProject({
+    ...p,
+    updatedAt: trashed.updatedAt + 1,
+    title: 'another tab edited',
+  });
+  expect((await listProjects())[0].trashedAt).toBe(trashed.trashedAt);
+  const restored = await setProjectTrashed(p.id, false);
+  expect(restored).toMatchObject({
+    id: p.id,
+    xml: p.xml,
+    draft: p.draft,
+    pages: p.pages,
+    title: 'another tab edited',
+  });
+  expect(restored.trashedAt).toBeUndefined();
+  expect(parseProject(JSON.stringify(trashed)).trashedAt).toBeUndefined();
 });

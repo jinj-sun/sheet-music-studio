@@ -18,7 +18,8 @@
     "omr:assets": "node scripts/copy-omr-assets.mjs",
     "models:download": "node scripts/download-models.mjs",
     "test:omr": "node scripts/smoke-omr.mjs",
-    "piano:check": "node scripts/check-piano.mjs"
+    "piano:check": "node scripts/check-piano.mjs",
+    "test:omr:pages": "node scripts/smoke-omr-pages.mjs"
   },
   "dependencies": {
     "fflate": "0.8.2",

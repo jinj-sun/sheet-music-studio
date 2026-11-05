@@ -32,7 +32,7 @@ npm run preview
 5. 时值修改作用于当前和弦组，保持其他音符和声部起点；缩短后留下可插入的空拍。增长时不可覆盖同声部下一音符或越过小节。
 6. 支持 100 步撤销/重做，快捷键 Ctrl/Cmd+Z、Ctrl/Cmd+Shift+Z、Ctrl+Y；Delete 删除当前音符。输入框内使用原生编辑快捷键。
 7. 上传 PNG、JPEG、WebP 原图后切换“并排校对”，分别缩放原图和谱面，逐音符修改并标记已校对。桌面为双栏，小屏纵向排列；谱面保持可横向滚动。引擎提供的谱行框可在原图中定位，**不伪造逐音符坐标或置信度**。
-8. 原图上限 25 MB / 4000 万像素；XML/MXL 导入上限 30 MB，主 XML 上限 20 MB，MXL 解压内容上限 100 MB。PDF/TIFF/HEIC 请先转换为 PNG；多页图片逐页识别。
+8. 原图上限 25 MB / 4000 万像素；XML/MXL 导入上限 30 MB，主 XML 上限 20 MB，MXL 解压内容上限 100 MB。PDF/TIFF/HEIC 请先逐页转换为 PNG。一次可选或拖入多张原图，最多 60 页、全部原图合计约 80 MB。
 
 ## 乐谱保真与数据
 
@@ -53,6 +53,14 @@ npm run preview
 浏览器使用本地 **Salamander 三角钢琴实录采样**（Alexander Holm，Yamaha C5，CC BY 3.0），替代原有三个正弦振荡器。30 个立体声 MP3 覆盖 A0–C8，小三度采样、邻近录音精确变调；按力度控制增益/低通，保留自然衰减，加入松键释放和总线压缩。这是单力度层子集，并非完整 16 层钢琴音源。提供播放、暂停、定位、停止、速度及音量；定位到长音中间会从录音对应衰减位置继续。采样随源码/构建分发（约 2 MB），运行时不访问外部音色 CDN；加载失败明确报错，停止播放并允许重试，不假装加载成功。授权与哈希见 `client/public/audio/piano/`。MIDI 使用同一时间线，格式 1、每声部/谱表分轨、9600 PPQ、速度轨与独立通道；保留首个 MIDI 乐器音色，最多 15 个独立通道。MIDI 节拍会量化到 tick，并非 MusicXML 的可逆替代格式。
 
 反复/跳转暂按书写顺序演奏；倚音、提示小音符、踏板、奏法、微分音、装饰音、八度线等存在解释限制时，界面列明差异，**必须明确勾选接受近似方式，才能试听或导出 MIDI**。MusicXML/MXL 不受此播放限制，不会删去这些记号。
+
+## 多页识谱、项目废纸篓与钢琴指法
+
+- 点击左侧 **图片识谱** 开始一个新项目，在文件窗口多选同一首曲子的 PNG、JPEG、WebP；也可以把多张图片拖进当前项目。选中的一批按文件名中的数字自然排序（2 在 10 前），通过“页序与结果”的前移/后移核对顺序。“添加图片页”把新一批接在当前页末尾。
+- 点击 **识别全部 N 页**。应用在一个 Worker 中逐页处理，显示当前页和阶段；每完成一页保存结果。取消、单页失败、模型缺失时保留原图与已完成页，重试跳过成功页。合谱成功会生成独立项目，原始识谱任务可继续重排合谱，不覆盖已编辑的项目。
+- 合谱完整复制各页小节节点，统一小节序号，保留所有逐页原图、原始引擎 XML 与元数据；总谱采用第一页的页眉。翻页跳转至对应小节，播放跟随可同步原图页。乐器定义、谱表结构、重复 XML ID 或跨页继承的拍号/时值/移调不兼容时拒绝自动合谱；可独立打开或下载每页 XML。跨页延音、拍号误识及其他乐谱准确性仍要校对。
+- **项目库 → 删除项目** 将该项目移到废纸篓，不删除其中的任何数据。**废纸篓 → 恢复项目** 可恢复；刷新保留废纸篓状态。暂不提供彻底删除；删除到废纸篓不会释放浏览器存储。原先的单页项目备份仍可导入，合谱项目备份携带全部页。
+- **音符属性 → 钢琴指法** 可手动选择 1–5 或移除简单指法；也可生成当前小节/整曲双手建议，再勾选要附上的条目。建议按上谱表右手、下谱表左手计算，相邻音、同时和弦及持续按键都会参与判断。复杂换指、超出手型的组合会跳过；建议供校对，不替代演奏者的手型判断。仅应用后写入 MusicXML，可撤销，并在谱面/导出中保留已有及选定的新指法。
 
 ## 连梁、节奏校对与播放高亮
 
@@ -91,8 +99,10 @@ Remove-Item Env:OMR_GITHUB_MIRROR
 
 ```powershell
 npm run test:omr
+npm run test:omr:pages
 # 可传入其他本地测试图片
 node scripts/smoke-omr.mjs C:/path/to/score.png
+node scripts/smoke-omr-pages.mjs C:/path/to/page-1.png C:/path/to/page-2.png
 ```
 
 默认输入是项目中的测试谱图，成功时保存真实输出 XML、浏览器/模型后端/耗时记录和截图。它验证端到端管线，不保证音符识别正确。
@@ -117,7 +127,9 @@ Remove-Item Env:E2E_PRODUCTION
 
 Playwright 默认使用已安装的 Chrome。改用 Edge：设置 `PW_BROWSER_CHANNEL=msedge`。不自动下载或安装浏览器。模型缺失路径在 E2E 中显式模拟 404；“真实运行时初始化”测试使用实际 Worker/ONNX/OpenCV，不模拟推理成功。
 
-本轮采样/连梁/高亮验收见 [docs/PIANO-PLAYBACK-VALIDATION.md](docs/PIANO-PLAYBACK-VALIDATION.md)。可运行 `node scripts/smoke-playback.mjs C:/path/to/project.studio.json` 在隔离 Chrome 中复查任意本地谱，默认夹具不含用户项目；输出位于忽略的 `tmp/playback-smoke/`。`APP_URL` 可设置生产预览地址，`PLAYBACK_OUTPUT` 可指定本地输出目录。
+多页识谱、废纸篓与指法验收见 [docs/MULTIPAGE-VALIDATION.md](docs/MULTIPAGE-VALIDATION.md)。
+
+采样/连梁/高亮验收见 [docs/PIANO-PLAYBACK-VALIDATION.md](docs/PIANO-PLAYBACK-VALIDATION.md)。可运行 `node scripts/smoke-playback.mjs C:/path/to/project.studio.json` 在隔离 Chrome 中复查任意本地谱，默认夹具不含用户项目；输出位于忽略的 `tmp/playback-smoke/`。`APP_URL` 可设置生产预览地址，`PLAYBACK_OUTPUT` 可指定本地输出目录。
 
 最新模型与推理结果见 [docs/OMR-MODEL-RECOVERY.md](docs/OMR-MODEL-RECOVERY.md)，首轮工程验证与已解决失败见 [docs/VALIDATION.md](docs/VALIDATION.md)，变更见 [CHANGELOG.md](CHANGELOG.md)。
 

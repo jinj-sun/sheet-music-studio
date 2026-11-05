@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   OpenSheetMusicDisplay,
   VexFlowGraphicalNote,
 } from 'opensheetmusicdisplay';
 import {
   type Score,
+  type ScoreNote,
   noteLabel,
   STEPS,
   descendants,
@@ -18,6 +19,7 @@ interface Props {
   beat: number | null;
   checked: string[];
   followPlayback: boolean;
+  jump: { measure: number } | null;
   onSelect: (id: string) => void;
 }
 export default function ScoreView({
@@ -27,12 +29,33 @@ export default function ScoreView({
   beat,
   checked,
   followPlayback,
+  jump,
   onSelect,
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const instance = useRef<OpenSheetMusicDisplay | null>(null);
   const targets = useRef(new Map<string, Element>());
   const followed = useRef('');
+  const playingIds = useRef(new Set<string>());
+  const index = useMemo(() => {
+    const byMeasure = new Map<number, ScoreNote[]>(),
+      byVoice = new Map<string, ScoreNote[]>();
+    for (const n of score.notes) {
+      const key = `${n.partIndex}/${n.measureIndex}/${n.staff}/${n.voice}`;
+      const inMeasure = byMeasure.get(n.measureIndex) || [],
+        inVoice = byVoice.get(key) || [];
+      inMeasure.push(n);
+      inVoice.push(n);
+      byMeasure.set(n.measureIndex, inMeasure);
+      byVoice.set(key, inVoice);
+    }
+    const measures = score.parts.reduce(
+      (longest, p) =>
+        p.measures.length > longest.length ? p.measures : longest,
+      [] as Score['measures'],
+    );
+    return { byMeasure, byVoice, measures };
+  }, [score]);
   const select = useRef(onSelect);
   select.current = onSelect;
   const [error, setError] = useState('');
@@ -46,6 +69,7 @@ export default function ScoreView({
     host.className = 'engraving';
     container.current?.replaceChildren(host);
     targets.current = new Map();
+    playingIds.current.clear();
     setBusy(true);
     setError('');
     const render = async () => {
@@ -58,8 +82,10 @@ export default function ScoreView({
           drawTitle: true,
           drawComposer: true,
           drawPartNames: true,
+          drawFingerings: true,
           drawingParameters: 'default',
           followCursor: false,
+          newSystemFromNewPageInXML: true,
           autoBeam: true,
           autoBeamOptions: {
             beam_rests: false,
@@ -84,7 +110,10 @@ export default function ScoreView({
           osmd.clear();
           return;
         }
-        for (const [index, measure] of osmd.Sheet.SourceMeasures.entries()) {
+        for (const [
+          measureIndex,
+          measure,
+        ] of osmd.Sheet.SourceMeasures.entries()) {
           const read = new Set(
             measure.VerticalSourceStaffEntryContainers.flatMap((c) =>
               c.StaffEntries.flatMap(
@@ -92,14 +121,12 @@ export default function ScoreView({
               ),
             ),
           ).size;
-          const expected = score.notes.filter(
-            (n) =>
-              n.measureIndex === index &&
-              n.element.getAttribute('print-object') !== 'no',
+          const expected = (index.byMeasure.get(measureIndex) || []).filter(
+            (n) => n.element.getAttribute('print-object') !== 'no',
           ).length;
           if (read < expected)
             throw new Error(
-              `渲染器只读入第 ${index + 1} 小节的 ${read}/${expected} 个音符，请检查 XML 中的记号与结构`,
+              `渲染器只读入第 ${measureIndex + 1} 小节的 ${read}/${expected} 个音符，请检查 XML 中的记号与结构`,
             );
         }
         const draw = () => {
@@ -131,13 +158,13 @@ export default function ScoreView({
                             ] === pitch.FundamentalNote,
                         )
                       : undefined;
-                    const candidates = score.notes.filter(
+                    const sourceVoice = sn.ParentVoiceEntry.ParentVoice.VoiceId;
+                    const candidates = (
+                      index.byVoice.get(
+                        `${partIndex}/${measureIndex}/${localStaff}/${sourceVoice}`,
+                      ) || []
+                    ).filter(
                       (n) =>
-                        n.partIndex === partIndex &&
-                        n.measureIndex === measureIndex &&
-                        n.staff === localStaff &&
-                        n.voice ===
-                          String(sn.ParentVoiceEntry.ParentVoice.VoiceId) &&
                         Math.abs(n.onset - onset) < 1e-6 &&
                         n.rest === sn.isRest() &&
                         (n.rest ||
@@ -183,6 +210,7 @@ export default function ScoreView({
                   }
           }
           targets.current = mapped;
+          playingIds.current.clear();
           setRevision((v) => v + 1);
         };
         draw();
@@ -209,25 +237,59 @@ export default function ScoreView({
       clearTimeout(resizeTimer);
       instance.current = null;
     };
-  }, [score, zoom]);
+  }, [score, zoom, index]);
   useEffect(() => {
-    let firstActive: Element | undefined;
+    if (!jump) return;
+    const target = score.notes.find(
+      (n) => n.measureIndex === jump.measure && targets.current.has(n.id),
+    );
+    const node = target && targets.current.get(target.id),
+      viewport = container.current?.closest('.score-scroll');
+    if (!node || !viewport) return;
+    const rect = node.getBoundingClientRect(),
+      bounds = viewport.getBoundingClientRect();
+    viewport.scrollTop += rect.top - bounds.top - 90;
+    viewport.scrollLeft += rect.left - bounds.left - 55;
+  }, [jump, revision, score]);
+  useEffect(() => {
+    const done = new Set(checked);
     for (const [id, element] of targets.current) {
-      const n = score.notes.find((n) => n.id === id)!;
       element.classList.toggle('selected-note', selected === id);
-      element.classList.toggle('checked-note', checked.includes(id));
-      element.classList.toggle(
-        'playing-note',
-        beat !== null &&
+      element.classList.toggle('checked-note', done.has(id));
+      element.setAttribute('aria-pressed', String(selected === id));
+    }
+  }, [selected, checked, revision]);
+  useEffect(() => {
+    const active = new Set<string>();
+    if (beat !== null) {
+      // The canonical timeline has shared bar starts; binary-search the current bar.
+      let lo = 0,
+        hi = index.measures.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (index.measures[mid].start <= beat + 1e-7) lo = mid + 1;
+        else hi = mid;
+      }
+      for (const n of index.byMeasure.get(lo - 1) || []) {
+        if (
           !n.grace &&
           !n.cue &&
           beat >= n.start - 1e-7 &&
-          beat < n.start + n.duration - 1e-7,
-      );
-      element.setAttribute('aria-pressed', String(selected === id));
-      if (!firstActive && element.classList.contains('playing-note'))
-        firstActive = element;
+          beat < n.start + n.duration - 1e-7 &&
+          targets.current.has(n.id)
+        )
+          active.add(n.id);
+      }
     }
+    for (const id of playingIds.current)
+      if (!active.has(id))
+        targets.current.get(id)?.classList.remove('playing-note');
+    for (const id of active)
+      if (!playingIds.current.has(id))
+        targets.current.get(id)?.classList.add('playing-note');
+    playingIds.current = active;
+    const firstId = active.values().next().value;
+    const firstActive = firstId && targets.current.get(firstId);
     if (beat === null) followed.current = '';
     if (followPlayback && firstActive) {
       const id = firstActive.getAttribute('data-note-id')!;
@@ -246,7 +308,7 @@ export default function ScoreView({
         }
       }
     }
-  }, [selected, beat, checked, revision, score, followPlayback]);
+  }, [beat, revision, index, followPlayback]);
   return (
     <div className="score-paper" data-testid="score-paper">
       {busy && (

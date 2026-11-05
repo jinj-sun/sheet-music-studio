@@ -1,5 +1,11 @@
 import { parseScore } from '../music/score';
 import type { ImportedScore } from './files';
+import {
+  imageIsValid,
+  validatePageData,
+  type ScoreImage,
+  type ProjectPage,
+} from './pages';
 export interface StudioProject {
   schema: 1;
   id: string;
@@ -8,9 +14,11 @@ export interface StudioProject {
   originalXml: string;
   draft: string;
   updatedAt: number;
+  trashedAt?: number;
   source?: ImportedScore;
-  image?: { name: string; dataUrl: string };
+  image?: ScoreImage;
   recognition?: Record<string, unknown>;
+  pages?: ProjectPage[];
   checked: string[];
 }
 export function newProject(xml: string, title?: string): StudioProject {
@@ -42,13 +50,8 @@ export function parseProject(input: string): StudioProject {
     throw new Error('项目版本或必要字段无效');
   if (p.xml) parseScore(p.xml);
   if (p.originalXml) parseScore(p.originalXml);
-  if (
-    p.image &&
-    (typeof p.image.name !== 'string' ||
-      typeof p.image.dataUrl !== 'string' ||
-      !/^data:image\/(png|jpeg|webp);base64,/.test(p.image.dataUrl))
-  )
-    throw new Error('项目原图格式无效');
+  if (p.image && !imageIsValid(p.image)) throw new Error('项目原图格式无效');
+  if (p.pages !== undefined) validatePageData(p.pages);
   if (
     p.source &&
     (typeof p.source.xml !== 'string' ||
@@ -58,8 +61,9 @@ export function parseProject(input: string): StudioProject {
   )
     throw new Error('项目导入来源无效');
   // Import as a new project: existing browser projects can never be overwritten by file IDs.
+  const { trashedAt: _trashedAt, ...copy } = p;
   return {
-    ...p,
+    ...copy,
     id: crypto.randomUUID(),
     updatedAt: Date.now(),
   } as StudioProject;
@@ -108,8 +112,16 @@ export async function saveProject(project: StudioProject): Promise<void> {
     const existing = store.get(project.id);
     existing.onsuccess = () => {
       // A delayed autosave must not overwrite a more recent committed snapshot.
-      if (!existing.result || existing.result.updatedAt <= project.updatedAt)
-        store.put(project);
+      const saved = existing.result as StudioProject | undefined;
+      if (!saved) store.put(project);
+      else if (saved.updatedAt <= project.updatedAt) {
+        // Trash state belongs to the library transaction, even when another tab saves edits.
+        const { trashedAt: _draftTrash, ...fields } = project;
+        store.put({
+          ...fields,
+          ...(saved.trashedAt ? { trashedAt: saved.trashedAt } : {}),
+        });
+      }
     };
     tx.oncomplete = () => {
       db.close();
@@ -125,3 +137,38 @@ export const listProjects = async () =>
   (
     await operation<StudioProject[]>('readonly', (store) => store.getAll())
   ).sort((a, b) => b.updatedAt - a.updatedAt);
+
+/** Reversible library deletion. Update the latest stored record atomically. */
+export async function setProjectTrashed(
+  id: string,
+  trashed: boolean,
+): Promise<StudioProject> {
+  const db = await database();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('projects', 'readwrite'),
+      store = tx.objectStore('projects');
+    const request = store.get(id);
+    let updated: StudioProject | undefined;
+    request.onsuccess = () => {
+      const current = request.result as StudioProject | undefined;
+      if (!current) return;
+      const { trashedAt: _previous, ...fields } = current;
+      const updatedAt = Math.max(Date.now(), current.updatedAt + 1);
+      updated = {
+        ...fields,
+        updatedAt,
+        ...(trashed ? { trashedAt: updatedAt } : {}),
+      };
+      store.put(updated);
+    };
+    tx.oncomplete = () => {
+      db.close();
+      if (updated) resolve(updated);
+      else reject(new Error('找不到要操作的项目'));
+    };
+    tx.onerror = tx.onabort = () => {
+      db.close();
+      reject(tx.error || new Error('项目操作失败，请重试'));
+    };
+  });
+}

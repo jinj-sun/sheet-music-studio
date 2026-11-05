@@ -46,6 +46,14 @@ export async function checkModels(
     }),
   );
 }
+export async function requireModels(signal: AbortSignal) {
+  const missing = (await checkModels(signal)).filter((s) => !s.available);
+  signal.throwIfAborted();
+  if (missing.length)
+    throw new Error(
+      `缺少 ${missing.length} 个识谱模型，未执行识别。请在项目目录运行 npm run models:download，然后 npm run models:check。缺少：${missing.map((m) => m.id).join('、')}`,
+    );
+}
 export const OMR_ERRORS: Record<string, string> = {
   bad_input: '图片解码失败，请使用 PNG、JPEG 或 WebP',
   not_music: '未检测到有效五线谱，请提高分辨率并裁剪无关背景',
@@ -102,17 +110,13 @@ export class OmrRecognizer {
     file: Blob,
     onProgress: (p: Progress) => void,
     signal: AbortSignal,
+    modelsChecked = false,
   ): Promise<RecognizeResult> {
     if (file.size > 25 * 1024 * 1024)
       throw new Error('图片超过 25 MB，请先缩小图片');
     const generation = ++this.generation;
-    const statuses = await checkModels(signal);
+    if (!modelsChecked) await requireModels(signal);
     signal.throwIfAborted();
-    const missing = statuses.filter((s) => !s.available);
-    if (missing.length)
-      throw new Error(
-        `缺少 ${missing.length} 个识谱模型，未执行识别。请在项目目录运行 npm run models:download，然后 npm run models:check。缺少：${missing.map((m) => m.id).join('、')}`,
-      );
     const abort = () => {
       void this.dispose();
     };

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Check, Plus, Link2 } from 'lucide-react';
 import {
   type Score,
@@ -20,6 +20,7 @@ import {
   deleteNote,
 } from '../music/editor';
 import { joinBeam, clearBeam } from '../music/beams';
+import FingeringEditor from './FingeringEditor';
 interface Props {
   score: Score;
   note?: ScoreNote;
@@ -82,12 +83,16 @@ export default function NoteInspector({
     setSlurStart('');
   }, [score.parts.length]);
   const pitch = { step, alter, octave };
-  const ordered = [...score.notes].sort(
-    (a, b) =>
-      a.partIndex - b.partIndex ||
-      a.staff - b.staff ||
-      a.start - b.start ||
-      a.noteIndex - b.noteIndex,
+  const ordered = useMemo(
+    () =>
+      [...score.notes].sort(
+        (a, b) =>
+          a.partIndex - b.partIndex ||
+          a.staff - b.staff ||
+          a.start - b.start ||
+          a.noteIndex - b.noteIndex,
+      ),
+    [score],
   );
   const index = ordered.findIndex((n) => n.id === note?.id);
   return (
@@ -297,6 +302,7 @@ export default function NoteInspector({
             横梁连接的八分音符和带单独符尾的八分音符时值相同。可依次选择组内音符扩展连梁，导出保留手工分组。
           </p>
         </section>
+        <FingeringEditor score={score} note={note} onCommand={onCommand} />
         <section className="inspector-section">
           <h3>连线与删除</h3>
           <button
