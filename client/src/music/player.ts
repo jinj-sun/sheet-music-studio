@@ -1,3 +1,4 @@
+import { PianoSampler } from './piano';
 import {
   type Timeline,
   buildTimeline,
@@ -9,6 +10,8 @@ export interface PlayerOptions {
   volume?: number;
   onProgress?: (beat: number, total: number) => void;
   onEnd?: () => void;
+  onLoading?: (loading: boolean) => void;
+  onError?: (error: unknown) => void;
 }
 export class MusicPlayer {
   private context: AudioContext | null = null;
@@ -28,7 +31,10 @@ export class MusicPlayer {
   private approximate = false;
   private generation = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
-  private nodes = new Set<OscillatorNode>();
+  private piano: PianoSampler | null = null;
+  private compressor: DynamicsCompressorNode | null = null;
+  private onLoading?: PlayerOptions['onLoading'];
+  private onError?: PlayerOptions['onError'];
   private onProgress?: PlayerOptions['onProgress'];
   private onEnd?: PlayerOptions['onEnd'];
   loadMusic(input: string | Timeline) {
@@ -42,19 +48,24 @@ export class MusicPlayer {
       this.speed =
         Math.min(300, Math.max(20, options.tempo)) /
         (this.timeline.tempos[0]?.bpm || 120);
-      if (resume) void this.play(position, this.approximate);
+      if (resume)
+        void this.play(position, this.approximate).catch((e) =>
+          this.onError?.(e),
+        );
     }
     if (options.volume !== undefined) {
       this.volume = Math.min(1, Math.max(0, options.volume));
       if (this.master && this.context)
         this.master.gain.setTargetAtTime(
-          this.volume * 0.2,
+          this.volume * 0.7,
           this.context.currentTime,
           0.01,
         );
     }
     if (options.onProgress) this.onProgress = options.onProgress;
     if (options.onEnd) this.onEnd = options.onEnd;
+    if (options.onLoading) this.onLoading = options.onLoading;
+    if (options.onError) this.onError = options.onError;
   }
   async play(position = this.offset, allowApproximate = false) {
     if (this.timeline.issues.length && !allowApproximate)
@@ -65,10 +76,28 @@ export class MusicPlayer {
     if (!this.context) {
       this.context = new AudioContext();
       this.master = this.context.createGain();
-      this.master.gain.value = this.volume * 0.2;
-      this.master.connect(this.context.destination);
+      this.master.gain.value = this.volume * 0.7;
+      this.compressor = this.context.createDynamicsCompressor();
+      this.compressor.threshold.value = -14;
+      this.compressor.knee.value = 16;
+      this.compressor.ratio.value = 4;
+      this.compressor.attack.value = 0.003;
+      this.compressor.release.value = 0.2;
+      this.master.connect(this.compressor);
+      this.compressor.connect(this.context.destination);
+      this.piano = new PianoSampler(this.context, this.master);
     }
-    await this.context.resume();
+    this.onLoading?.(true);
+    try {
+      await this.context.resume();
+      if (generation !== this.generation) return;
+      await this.piano!.prepare(this.timeline.notes.map((n) => n.pitch));
+    } catch (error) {
+      if (generation !== this.generation) return;
+      throw error;
+    } finally {
+      if (generation === this.generation) this.onLoading?.(false);
+    }
     if (generation !== this.generation) return;
     this.offset = Math.max(0, Math.min(position, this.timeline.duration));
     if (this.offset >= this.timeline.duration) this.offset = 0;
@@ -76,7 +105,7 @@ export class MusicPlayer {
     this.running = true;
     this.nextNote = 0;
     this.schedule();
-    this.timer = setInterval(() => this.schedule(), 25);
+    if (this.running) this.timer = setInterval(() => this.schedule(), 25);
   }
   private schedule() {
     if (!this.context || !this.running) return;
@@ -99,58 +128,15 @@ export class MusicPlayer {
         0.005,
         this.epoch + (end - origin) / this.speed - scheduled,
       );
-      this.tone(n.pitch, scheduled, duration, n.velocity / 127);
+      const age = Math.max(0, (origin + elapsed - start) / this.speed);
+      this.piano!.note(n.pitch, scheduled, duration, n.velocity / 127, age);
     }
     const current = this.getCurrentTime();
     this.onProgress?.(current, this.timeline.duration);
     if (current >= this.timeline.duration - 1e-6) {
       this.offset = this.timeline.duration;
-      this.clear();
+      this.clear(false);
       this.onEnd?.();
-    }
-  }
-  private tone(
-    pitch: number,
-    start: number,
-    duration: number,
-    velocity: number,
-  ) {
-    const ctx = this.context!,
-      env = ctx.createGain();
-    env.connect(this.master!);
-    env.gain.setValueAtTime(0, start);
-    env.gain.linearRampToValueAtTime(
-      velocity,
-      start + Math.min(0.004, duration / 4),
-    );
-    env.gain.exponentialRampToValueAtTime(
-      Math.max(0.001, velocity * 0.22),
-      start + Math.min(0.12, duration * 0.7),
-    );
-    env.gain.setValueAtTime(Math.max(0.001, velocity * 0.22), start + duration);
-    env.gain.exponentialRampToValueAtTime(0.0001, start + duration + 0.05);
-    let remaining = 3;
-    for (const [ratio, amplitude] of [
-      [1, 0.8],
-      [2, 0.2],
-      [3, 0.07],
-    ]) {
-      const osc = ctx.createOscillator(),
-        harmonic = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = 440 * 2 ** ((pitch - 69) / 12) * ratio;
-      harmonic.gain.value = amplitude;
-      osc.connect(harmonic);
-      harmonic.connect(env);
-      this.nodes.add(osc);
-      osc.onended = () => {
-        this.nodes.delete(osc);
-        osc.disconnect();
-        harmonic.disconnect();
-        if (--remaining === 0) env.disconnect();
-      };
-      osc.start(start);
-      osc.stop(start + duration + 0.06);
     }
   }
   getCurrentTime() {
@@ -188,25 +174,20 @@ export class MusicPlayer {
     this.offset = 0;
     this.onProgress?.(0, this.timeline.duration);
   }
-  private clear() {
+  private clear(stopVoices = true) {
     this.generation++;
     this.running = false;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    for (const osc of this.nodes) {
-      try {
-        osc.stop();
-      } catch {
-        /* already stopped */
-      }
-      osc.disconnect();
-    }
-    this.nodes.clear();
+    this.onLoading?.(false);
+    if (stopVoices) this.piano?.stop();
   }
   async dispose() {
     this.stop();
     await this.context?.close();
     this.context = null;
     this.master = null;
+    this.piano = null;
+    this.compressor = null;
   }
 }

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node scripts/prepare-omr.mjs && vite --host 127.0.0.1",
     "dev:client": "npm run dev",
-    "build": "node scripts/prepare-omr.mjs && npm run type:check && vite build",
+    "build": "node scripts/prepare-omr.mjs && npm run piano:check && npm run type:check && vite build",
     "build:client": "npm run build",
     "preview": "vite preview --host 127.0.0.1",
     "start": "npm run preview",
@@ -17,7 +17,8 @@
     "models:check": "node scripts/check-models.mjs",
     "omr:assets": "node scripts/copy-omr-assets.mjs",
     "models:download": "node scripts/download-models.mjs",
-    "test:omr": "node scripts/smoke-omr.mjs"
+    "test:omr": "node scripts/smoke-omr.mjs",
+    "piano:check": "node scripts/check-piano.mjs"
   },
   "dependencies": {
     "fflate": "0.8.2",

@@ -97,6 +97,8 @@ export default function Studio() {
     [beat, setBeat] = useState(0),
     [tempo, setTempo] = useState(120),
     [volume, setVolume] = useState(0.6);
+  const [audioLoading, setAudioLoading] = useState(false);
+  const [followPlayback, setFollowPlayback] = useState(true);
   const [approximate, setApproximate] = useState(false);
   const [busy, setBusy] = useState(false),
     [progress, setProgress] = useState<Progress | null>(null);
@@ -231,6 +233,11 @@ export default function Studio() {
       volume,
       onProgress: (beat) => setBeat(beat),
       onEnd: () => setPlaying(false),
+      onLoading: setAudioLoading,
+      onError: (e) => {
+        setPlaying(false);
+        fail(e);
+      },
     });
     return () => player.current?.stop();
     // Volume has its own live control; changing it must not reload the score.
@@ -462,6 +469,7 @@ export default function Studio() {
         player.current.pause();
         setPlaying(false);
       } else {
+        setError('');
         await player.current.play(player.current.getCurrentTime(), approximate);
         setPlaying(player.current.getIsPlaying());
       }
@@ -1116,6 +1124,14 @@ export default function Studio() {
                       <ZoomIn size={15} />
                     </button>
                   </div>
+                  <label className="checkbox playback-follow">
+                    <input
+                      type="checkbox"
+                      checked={followPlayback}
+                      onChange={(e) => setFollowPlayback(e.target.checked)}
+                    />
+                    播放跟随谱面
+                  </label>
                 </div>
                 <div
                   className="editor-tabs"
@@ -1338,6 +1354,7 @@ export default function Studio() {
                             selected={selected}
                             beat={playing ? beat : null}
                             checked={project.checked}
+                            followPlayback={followPlayback}
                             onSelect={setSelected}
                           />
                         ) : (
@@ -1427,15 +1444,24 @@ export default function Studio() {
           <div>
             <strong>{name}</strong>
             <small>
-              {timeline ? '钢琴合成音色 · 声部并行' : '准备好，写下第一个音符'}
+              {audioLoading
+                ? '正在加载钢琴采样…'
+                : timeline
+                  ? 'Salamander 三角钢琴 · 实录采样'
+                  : '准备好，写下第一个音符'}
             </small>
           </div>
         </div>
         <div className="transport-controls">
           <button
-            aria-label={playing ? '暂停' : '播放'}
+            aria-label={
+              audioLoading ? '正在加载钢琴采样' : playing ? '暂停' : '播放'
+            }
+            aria-busy={audioLoading}
             className="play-button"
-            disabled={!timeline?.notes.length || playbackBlocked || busy}
+            disabled={
+              !timeline?.notes.length || playbackBlocked || busy || audioLoading
+            }
             onClick={() => void playPause()}
           >
             {playing ? <Pause size={19} /> : <Play size={19} />}

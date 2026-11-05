@@ -50,9 +50,17 @@ npm run preview
 
 共享 `music/timeline.ts` 处理 `divisions`、`duration`、`chord`、`backup`、`forward`、多乐器小节对齐、移调、速度变化和声音延音线。时值使用四分音符拍数，附点及连音实际时长以 MusicXML duration 为准。
 
-浏览器以 Web Audio 合成钢琴音色，提供播放、暂停、定位、停止、速度及音量；定位到长音中间会播放剩余部分。MIDI 使用同一时间线，格式 1、每声部/谱表分轨、9600 PPQ、速度轨与独立通道；保留首个 MIDI 乐器音色，最多 15 个独立通道。MIDI 节拍会量化到 tick，并非 MusicXML 的可逆替代格式。
+浏览器使用本地 **Salamander 三角钢琴实录采样**（Alexander Holm，Yamaha C5，CC BY 3.0），替代原有三个正弦振荡器。30 个立体声 MP3 覆盖 A0–C8，小三度采样、邻近录音精确变调；按力度控制增益/低通，保留自然衰减，加入松键释放和总线压缩。这是单力度层子集，并非完整 16 层钢琴音源。提供播放、暂停、定位、停止、速度及音量；定位到长音中间会从录音对应衰减位置继续。采样随源码/构建分发（约 2 MB），运行时不访问外部音色 CDN；加载失败明确报错，停止播放并允许重试，不假装加载成功。授权与哈希见 `client/public/audio/piano/`。MIDI 使用同一时间线，格式 1、每声部/谱表分轨、9600 PPQ、速度轨与独立通道；保留首个 MIDI 乐器音色，最多 15 个独立通道。MIDI 节拍会量化到 tick，并非 MusicXML 的可逆替代格式。
 
 反复/跳转暂按书写顺序演奏；倚音、提示小音符、踏板、奏法、微分音、装饰音、八度线等存在解释限制时，界面列明差异，**必须明确勾选接受近似方式，才能试听或导出 MIDI**。MusicXML/MXL 不受此播放限制，不会删去这些记号。
+
+## 连梁、节奏校对与播放高亮
+
+- 未指定 `<beam>` 的八分及更短音符自动连梁；仅影响显示，不改写导入的 XML。横梁与单独符尾不改变音符时值。自动排版不等于恢复原图所有手工分组。
+- 属性面板“与下一音符连梁”可连接/扩展同小节同声部的连续音符；“清除手工连梁”后恢复自动排版。手工分组写入 XML，支持撤销/重做与导出。连音组、跨小节或含样式/扩展的复杂连梁保留源码编辑。
+- 时值默认保持其他音符起点。选择“顺移本小节同声部后续音符”可修正 OMR 附点等误识，同时保持另一谱表/声部及方向记号的原时间锚。涉及延音、手工连梁、中途属性变化、带扩展的时间移动或小节尾部时间占位时保护性拒绝；先解除有关连线/连梁或使用 XML。
+- 以 AudioContext 时间驱动橙色音头高亮，左右手、和弦、多声部同时显示；延音线续音按对应的记谱音符位置高亮。暂停/停止清除高亮，定位/变速同步更新。修复 SVG 内部路径固定黑色覆盖分组颜色的问题。
+- “播放跟随谱面”可自动滚动到当前小节，开关只影响视图。识别模型没有因此改变，真实节奏错误仍须对照原图校正，不能只凭拍号自动猜测。
 
 ## 图片识谱模型
 
@@ -96,6 +104,7 @@ node scripts/smoke-omr.mjs C:/path/to/score.png
 ## 检查
 
 ```powershell
+npm run piano:check
 npm run type:check
 npm test
 npm run build
@@ -107,6 +116,8 @@ Remove-Item Env:E2E_PRODUCTION
 ```
 
 Playwright 默认使用已安装的 Chrome。改用 Edge：设置 `PW_BROWSER_CHANNEL=msedge`。不自动下载或安装浏览器。模型缺失路径在 E2E 中显式模拟 404；“真实运行时初始化”测试使用实际 Worker/ONNX/OpenCV，不模拟推理成功。
+
+本轮采样/连梁/高亮验收见 [docs/PIANO-PLAYBACK-VALIDATION.md](docs/PIANO-PLAYBACK-VALIDATION.md)。可运行 `node scripts/smoke-playback.mjs C:/path/to/project.studio.json` 在隔离 Chrome 中复查任意本地谱，默认夹具不含用户项目；输出位于忽略的 `tmp/playback-smoke/`。`APP_URL` 可设置生产预览地址，`PLAYBACK_OUTPUT` 可指定本地输出目录。
 
 最新模型与推理结果见 [docs/OMR-MODEL-RECOVERY.md](docs/OMR-MODEL-RECOVERY.md)，首轮工程验证与已解决失败见 [docs/VALIDATION.md](docs/VALIDATION.md)，变更见 [CHANGELOG.md](CHANGELOG.md)。
 

@@ -60,7 +60,15 @@ function guardStructure(m: ScoreMeasure) {
     throw new Error(
       '此小节中途改变 divisions，结构编辑已保护性停用；请使用 XML 源码编辑',
     );
-  if (kids(m.element, 'attributes').length > 1)
+  const firstTimed = kids(m.element).findIndex((e) =>
+    ['note', 'forward', 'backup'].includes(e.localName),
+  );
+  if (
+    kids(m.element).some(
+      (e, i) =>
+        e.localName === 'attributes' && firstTimed >= 0 && i > firstTimed,
+    )
+  )
     throw new Error('此小节含中途属性变更，请使用 XML 调整结构');
 }
 function pitch(n: ScoreNote, value: PitchInput) {
@@ -164,6 +172,7 @@ export function changeRhythm(
   id: string,
   type: NoteType,
   dots: number,
+  ripple = false,
 ) {
   return transaction(xml, (s) => {
     if (
@@ -203,7 +212,9 @@ export function changeRhythm(
           x.onset >= root.onset + root.duration - EPS,
       )
       .sort((a, b) => a.onset - b.onset)[0];
-    const limit = next?.onset ?? m.duration;
+    const limit = ripple
+      ? Math.max(m.nominal, m.duration)
+      : (next?.onset ?? m.duration);
     if (root.onset + duration > limit + EPS)
       throw new Error(
         '新时值会覆盖同声部的下一音符或超出小节；请先缩短/删除后续音符',
@@ -213,6 +224,10 @@ export function changeRhythm(
       notationDuration(note, type, dots);
     }
     const delta = duration - root.duration;
+    if (ripple && Math.abs(delta) > EPS) {
+      rippleVoice(m, root, g, duration, delta);
+      return;
+    }
     if (Math.abs(delta) > EPS)
       m.element.insertBefore(
         movement(
@@ -224,6 +239,108 @@ export function changeRhythm(
         g.at(-1)!.element.nextSibling,
       );
   });
+}
+
+/** Retime only this staff/voice inside the measure; keep all musical nodes in place. */
+function rippleVoice(
+  m: ScoreMeasure,
+  root: ScoreNote,
+  changed: ScoreNote[],
+  duration: number,
+  delta: number,
+) {
+  const affected = m.notes.filter(
+    (n) =>
+      n.staff === root.staff &&
+      n.voice === root.voice &&
+      !changed.includes(n) &&
+      n.onset >= root.onset + root.duration - EPS,
+  );
+  if (
+    affected.some(
+      (n) =>
+        n.grace || n.tieStart || n.tieStop || kids(n.element, 'beam').length,
+    )
+  )
+    throw new Error(
+      '顺移涉及倚音、延音线或手工连梁，请先解除连线/连梁，或使用 XML 编辑',
+    );
+  const starts = new Map(
+    m.notes.map((n) => [
+      n.element,
+      n.onset + (affected.includes(n) ? delta : 0),
+    ]),
+  );
+  if (
+    m.notes.some(
+      (n) =>
+        starts.get(n.element)! < -EPS ||
+        starts.get(n.element)! + (changed.includes(n) ? duration : n.duration) >
+          Math.max(m.nominal, m.duration) + EPS,
+    )
+  )
+    throw new Error('顺移会使音符超出小节；请先缩短后续音符');
+  const elements = kids(m.element),
+    notes = new Map(m.notes.map((n) => [n.element, n]));
+  const lastNote = elements.map((e) => e.localName).lastIndexOf('note');
+  if (
+    elements
+      .slice(lastNote + 1)
+      .some((e) => ['backup', 'forward'].includes(e.localName))
+  )
+    throw new Error('小节尾部有独立时间占位，请使用 XML 编辑以保留其含义');
+  const positions = new Map<Element, number>();
+  let oldCursor = 0;
+  // Only bare cursor movements can be rewritten. Extensions/IDs on them must survive.
+  for (const e of elements) {
+    positions.set(e, oldCursor);
+    if (['backup', 'forward'].includes(e.localName)) {
+      if (
+        e.attributes.length ||
+        kids(e).some((c) => c.localName !== 'duration') ||
+        child(e, 'duration')?.attributes.length ||
+        Array.from(e.childNodes).some((c) => c.nodeType === 8)
+      )
+        throw new Error(
+          '此小节的时间移动包含扩展或声部标记，请使用 XML 编辑以保留全部信息',
+        );
+      oldCursor +=
+        ((e.localName === 'backup' ? -1 : 1) * Number(text(e, 'duration'))) /
+        m.divisions;
+    } else {
+      const n = notes.get(e);
+      if (n && !n.chord) oldCursor = n.onset + n.duration;
+    }
+  }
+  let cursor = 0;
+  for (const e of elements) {
+    if (['backup', 'forward'].includes(e.localName)) {
+      e.remove();
+      continue;
+    }
+    const n = notes.get(e);
+    // Directions, harmony and extension nodes retain their original time anchor.
+    const anchor = n
+      ? n.chord
+        ? undefined
+        : starts.get(e)
+      : ['attributes', 'print', 'barline'].includes(e.localName)
+        ? undefined
+        : positions.get(e);
+    if (anchor !== undefined && Math.abs(anchor - cursor) > EPS) {
+      m.element.insertBefore(
+        movement(
+          m.element,
+          anchor < cursor ? 'backup' : 'forward',
+          Math.abs(anchor - cursor),
+          m.divisions,
+        ),
+        e,
+      );
+      cursor = anchor;
+    }
+    if (n && !n.chord) cursor += changed.includes(n) ? duration : n.duration;
+  }
 }
 function buildNote(parent: Element, input: InsertInput, divisions: number) {
   if (

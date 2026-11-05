@@ -19,6 +19,7 @@ import {
   toggleSlur,
   deleteNote,
 } from '../music/editor';
+import { joinBeam, clearBeam } from '../music/beams';
 interface Props {
   score: Score;
   note?: ScoreNote;
@@ -61,6 +62,7 @@ export default function NoteInspector({
     [onset, setOnset] = useState(0),
     [rest, setRest] = useState(false);
   const [slurStart, setSlurStart] = useState('');
+  const [ripple, setRipple] = useState(false);
   useEffect(() => {
     if (note) {
       setStep(note.step);
@@ -241,15 +243,58 @@ export default function NoteInspector({
             disabled={!note}
             onClick={() =>
               onCommand(
-                (xml) => changeRhythm(xml, note!.id, type, dots),
-                '和弦组时值已更新，其他音符起点保持原位',
+                (xml) => changeRhythm(xml, note!.id, type, dots, ripple),
+                ripple
+                  ? '时值已更新；本小节同声部后续音符已顺移，其他声部保持原位'
+                  : '和弦组时值已更新，其他音符起点保持原位',
               )
             }
           >
             应用时值
           </button>
+          <label>
+            时值修改方式
+            <select
+              aria-label="时值修改方式"
+              value={ripple ? 'ripple' : 'fixed'}
+              onChange={(e) => setRipple(e.target.value === 'ripple')}
+            >
+              <option value="fixed">保持其他音符起点</option>
+              <option value="ripple">顺移本小节同声部后续音符</option>
+            </select>
+          </label>
           <p className="hint">
-            以四分音符为 1 拍。不会移动其他声部；时值不可覆盖下一音符。
+            {note &&
+              `当前实际时长 ${Number(note.duration.toFixed(4))} 拍，起点 ${Number(note.onset.toFixed(4))} 拍（从 0 起）。`}
+            以四分音符为 1
+            拍。顺移仅作用于本小节所选谱表/声部，可用于修正误识的附点；其他声部与方向记号保持原位。
+          </p>
+          <div className="button-pair">
+            <button
+              disabled={!note}
+              onClick={() =>
+                onCommand(
+                  (xml) => joinBeam(xml, note!.id),
+                  '已与下一音连梁，音高与时值保持不变',
+                )
+              }
+            >
+              与下一音符连梁
+            </button>
+            <button
+              disabled={!note}
+              onClick={() =>
+                onCommand(
+                  (xml) => clearBeam(xml, note!.id),
+                  '已清除当前手工连梁；未指定连梁的音符采用自动排版',
+                )
+              }
+            >
+              清除手工连梁
+            </button>
+          </div>
+          <p className="hint">
+            横梁连接的八分音符和带单独符尾的八分音符时值相同。可依次选择组内音符扩展连梁，导出保留手工分组。
           </p>
         </section>
         <section className="inspector-section">

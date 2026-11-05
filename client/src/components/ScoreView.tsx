@@ -17,6 +17,7 @@ interface Props {
   selected: string;
   beat: number | null;
   checked: string[];
+  followPlayback: boolean;
   onSelect: (id: string) => void;
 }
 export default function ScoreView({
@@ -25,11 +26,13 @@ export default function ScoreView({
   selected,
   beat,
   checked,
+  followPlayback,
   onSelect,
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const instance = useRef<OpenSheetMusicDisplay | null>(null);
   const targets = useRef(new Map<string, Element>());
+  const followed = useRef('');
   const select = useRef(onSelect);
   select.current = onSelect;
   const [error, setError] = useState('');
@@ -57,6 +60,11 @@ export default function ScoreView({
           drawPartNames: true,
           drawingParameters: 'default',
           followCursor: false,
+          autoBeam: true,
+          autoBeamOptions: {
+            beam_rests: false,
+            maintain_stem_directions: false,
+          },
         });
         instance.current = osmd;
         osmd.Zoom = zoom;
@@ -203,6 +211,7 @@ export default function ScoreView({
     };
   }, [score, zoom]);
   useEffect(() => {
+    let firstActive: Element | undefined;
     for (const [id, element] of targets.current) {
       const n = score.notes.find((n) => n.id === id)!;
       element.classList.toggle('selected-note', selected === id);
@@ -210,12 +219,34 @@ export default function ScoreView({
       element.classList.toggle(
         'playing-note',
         beat !== null &&
-          beat >= n.start - 0.02 &&
-          beat < n.start + n.duration - 0.02,
+          !n.grace &&
+          !n.cue &&
+          beat >= n.start - 1e-7 &&
+          beat < n.start + n.duration - 1e-7,
       );
       element.setAttribute('aria-pressed', String(selected === id));
+      if (!firstActive && element.classList.contains('playing-note'))
+        firstActive = element;
     }
-  }, [selected, beat, checked, revision, score]);
+    if (beat === null) followed.current = '';
+    if (followPlayback && firstActive) {
+      const id = firstActive.getAttribute('data-note-id')!;
+      const measure = id.split('n')[0];
+      if (followed.current !== measure) {
+        followed.current = measure;
+        const viewport = container.current?.closest('.score-scroll');
+        if (viewport) {
+          const rect = firstActive.getBoundingClientRect(),
+            bounds = viewport.getBoundingClientRect();
+          if (rect.top < bounds.top + 30 || rect.bottom > bounds.bottom - 30)
+            viewport.scrollTop +=
+              rect.top - bounds.top - Math.min(100, bounds.height / 3);
+          if (rect.left < bounds.left + 20 || rect.right > bounds.right - 20)
+            viewport.scrollLeft += rect.left - bounds.left - 50;
+        }
+      }
+    }
+  }, [selected, beat, checked, revision, score, followPlayback]);
   return (
     <div className="score-paper" data-testid="score-paper">
       {busy && (

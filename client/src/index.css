@@ -629,21 +629,26 @@ a {
   transition: fill 0.1s;
   pointer-events: all;
 }
-.score-note:hover {
+.score-note:hover,
+.score-note:hover path {
   fill: #3b8966 !important;
   stroke: #3b8966 !important;
 }
-.selected-note {
+.score-note.selected-note,
+.score-note.selected-note path {
   fill: #267755 !important;
   stroke: #267755 !important;
   filter: drop-shadow(0 0 3px #409e7f77);
 }
-.checked-note {
+.score-note.checked-note:not(.selected-note),
+.score-note.checked-note:not(.selected-note) path {
   fill: #6a9b87 !important;
 }
-.playing-note {
+.score-note.playing-note,
+.score-note.playing-note path {
   fill: #d88b30 !important;
   stroke: #d88b30 !important;
+  filter: drop-shadow(0 0 3px #d88b3088);
 }
 .original-pane {
   display: flex;
@@ -1958,4 +1963,10 @@ input[type='range'] {
     padding-top: 5px;
     padding-bottom: 5px;
   }
+}
+
+.playback-follow {
+  margin-left: auto;
+  white-space: nowrap;
+  align-items: center;
 }

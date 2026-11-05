@@ -142,6 +142,116 @@ test('sample playback can pause, seek, change speed, stop and export XML', async
     '<score-partwise',
   );
 });
+
+test('OMR-style eighth notes beam without changing XML, and both hands highlight in sampled piano playback', async ({
+  page,
+}) => {
+  const failures: string[] = [],
+    samples: string[] = [];
+  page.on('pageerror', (e) => failures.push(e.message));
+  page.on('response', (r) => {
+    if (r.url().includes('/audio/piano/') && r.ok()) samples.push(r.url());
+  });
+  await page
+    .getByTestId('score-file-input')
+    .setInputFiles(resolve('tests/fixtures/piano-rhythm.musicxml'));
+  const paper = page.getByTestId('score-paper');
+  await expect(paper.locator('[data-note-id]')).toHaveCount(16);
+  expect(await paper.locator('.vf-beam').count()).toBeGreaterThan(0);
+  await page.getByLabel('播放速度', { exact: true }).fill('60');
+  await page.getByLabel('播放进度', { exact: true }).fill('1.1');
+  await page.getByRole('button', { name: '播放', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: '暂停', exact: true }),
+  ).toBeVisible();
+  for (const id of ['p0m0n3', 'p0m0n4']) {
+    const note = paper.locator(`[data-note-id="${id}"]`);
+    await expect(note).toHaveClass(/playing-note/);
+    const path = note.locator('path').first();
+    expect(await path.evaluate((e) => getComputedStyle(e).fill)).toBe(
+      'rgb(216, 139, 48)',
+    );
+  }
+  expect(samples.length).toBeGreaterThan(1);
+  await page.screenshot({ path: 'docs/screenshots/piano-playback.png' });
+  await page.getByRole('button', { name: '暂停', exact: true }).click();
+  await expect(paper.locator('.playing-note')).toHaveCount(0);
+  await page.getByLabel('播放进度', { exact: true }).fill('6.1');
+  await page.getByRole('button', { name: '播放', exact: true }).click();
+  await expect(paper.locator('.playing-note')).toHaveCount(3);
+  for (const id of ['p0m1n1', 'p0m1n5', 'p0m1n6'])
+    await expect(paper.locator(`[data-note-id="${id}"]`)).toHaveClass(
+      /playing-note/,
+    );
+  await page.getByRole('button', { name: '停止', exact: true }).click();
+  await page.getByText('导出', { exact: true }).click();
+  const exported = page.waitForEvent('download');
+  await page
+    .getByRole('button', { name: '导出 MusicXML', exact: true })
+    .click();
+  expect(readFileSync((await (await exported).path())!, 'utf8')).toBe(
+    readFileSync('tests/fixtures/piano-rhythm.musicxml', 'utf8'),
+  );
+  expect(failures).toEqual([]);
+});
+
+test('manual beams and ripple correction are editable, undoable and retain the other hand', async ({
+  page,
+}) => {
+  await page
+    .getByTestId('score-file-input')
+    .setInputFiles(resolve('tests/fixtures/piano-rhythm.musicxml'));
+  const paper = page.getByTestId('score-paper');
+  await expect(paper.locator('[data-note-id="p0m0n3"]')).toBeVisible();
+  await paper.locator('[data-note-id="p0m0n3"]').click();
+  await page
+    .getByRole('button', { name: '与下一音符连梁', exact: true })
+    .click();
+  await expect(
+    page.getByText('已与下一音连梁，音高与时值保持不变', { exact: true }),
+  ).toBeVisible();
+  await paper.locator('[data-note-id="p0m0n6"]').click();
+  await page.getByLabel('附点', { exact: true }).selectOption('0');
+  await page.getByLabel('时值修改方式', { exact: true }).selectOption('ripple');
+  await page.getByRole('button', { name: '应用时值', exact: true }).click();
+  await page.getByRole('tab', { name: 'XML 源码', exact: true }).click();
+  let xml = await page
+    .getByLabel('MusicXML 源码', { exact: true })
+    .inputValue();
+  expect(xml).toContain('<beam number="1">begin</beam>');
+  const timing = await page.evaluate((xml) => {
+    const d = new DOMParser().parseFromString(xml, 'text/xml');
+    return [...d.querySelectorAll('measure')][0]
+      .querySelectorAll('note')[6]
+      .querySelector('duration')!.textContent;
+  }, xml);
+  expect(timing).toBe('240');
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  xml = await page.getByLabel('MusicXML 源码', { exact: true }).inputValue();
+  expect(xml).toContain('<duration>360</duration>');
+});
+
+test('missing piano samples stop playback with an explicit error and allow retry', async ({
+  page,
+}) => {
+  await page.getByRole('button', { name: '加载示例乐谱', exact: true }).click();
+  await page.route('**/audio/piano/*.mp3', (r) =>
+    r.fulfill({ status: 404, body: '' }),
+  );
+  await page.getByRole('button', { name: '播放', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('钢琴采样');
+  await expect(
+    page.getByRole('button', { name: '播放', exact: true }),
+  ).toBeEnabled();
+  await expect(page.getByLabel('播放进度', { exact: true })).toHaveValue('0');
+  await page.unroute('**/audio/piano/*.mp3');
+  await page.getByRole('button', { name: '播放', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: '暂停', exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await page.getByRole('button', { name: '停止', exact: true }).click();
+});
 test('image comparison, independent zoom and truthful missing-model error', async ({
   page,
 }) => {
@@ -150,16 +260,14 @@ test('image comparison, independent zoom and truthful missing-model error', asyn
     route.fulfill({ status: 404, body: '' }),
   );
   await create(page);
-  await page
-    .getByTestId('image-file-input')
-    .setInputFiles({
-      name: 'scan.png',
-      mimeType: 'image/png',
-      buffer: Buffer.from(
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB98AAAAASUVORK5CYII=',
-        'base64',
-      ),
-    });
+  await page.getByTestId('image-file-input').setInputFiles({
+    name: 'scan.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB98AAAAASUVORK5CYII=',
+      'base64',
+    ),
+  });
   await expect(
     page.getByRole('img', { name: '乐谱原图', exact: true }),
   ).toBeVisible();
@@ -236,13 +344,11 @@ test('tie, slur, rhythm, insertion, extra voice and project/MXL round-trip', asy
     .getByRole('button', { name: '下载项目备份', exact: true })
     .click();
   const backup = await pending;
-  await page
-    .getByTestId('score-file-input')
-    .setInputFiles({
-      name: backup.suggestedFilename(),
-      mimeType: 'application/json',
-      buffer: readFileSync((await backup.path())!),
-    });
+  await page.getByTestId('score-file-input').setInputFiles({
+    name: backup.suggestedFilename(),
+    mimeType: 'application/json',
+    buffer: readFileSync((await backup.path())!),
+  });
   await expect(page.getByText('项目已导入为独立副本')).toBeVisible();
   await expect(page.getByText('10 个记谱音符')).toBeVisible();
   await page.getByText('导出', { exact: true }).click();
@@ -251,13 +357,11 @@ test('tie, slur, rhythm, insertion, extra voice and project/MXL round-trip', asy
     .getByRole('button', { name: '导出 MXL（含附件）', exact: true })
     .click();
   const mxl = await mxlPending;
-  await page
-    .getByTestId('score-file-input')
-    .setInputFiles({
-      name: mxl.suggestedFilename(),
-      mimeType: 'application/vnd.recordare.musicxml',
-      buffer: readFileSync((await mxl.path())!),
-    });
+  await page.getByTestId('score-file-input').setInputFiles({
+    name: mxl.suggestedFilename(),
+    mimeType: 'application/vnd.recordare.musicxml',
+    buffer: readFileSync((await mxl.path())!),
+  });
   await expect(page.getByText('10 个记谱音符')).toBeVisible();
   await expect(page.locator('[data-note-id="p0m0n9"]')).toBeVisible();
 });
