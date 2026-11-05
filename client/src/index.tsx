@@ -1,36 +1,30 @@
-import React from 'react';
+import { Component, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
-import { ErrorBoundary } from 'react-error-boundary';
-
-import { AppContainer } from '@lark-apaas/client-toolkit/components/AppContainer';
-import { ErrorRender } from '@lark-apaas/client-toolkit/components/ErrorRender';
-
-import RoutesComponent from './app.tsx';
+import App from './app';
 import './index.css';
-import { createPortal } from 'react-dom';
-import { Toaster } from '@client/src/components/ui/sonner';
-
-const CLIENT_BASE_PATH = process.env.CLIENT_BASE_PATH || '/';
-
-const MainApp = () => {
-  return (
-    <BrowserRouter basename={CLIENT_BASE_PATH}>
-      <AppContainer defaultTheme="light">
-        <ErrorBoundary
-          fallbackRender={({ error, resetErrorBoundary }) => (
-            <ErrorRender
-              error={error as Error}
-              resetErrorBoundary={resetErrorBoundary}
-            />
-          )}
-        >
-          <RoutesComponent />
-          {createPortal(<Toaster />, document.body)}
-        </ErrorBoundary>
-      </AppContainer>
-    </BrowserRouter>
-  );
-};
-
-createRoot(document.getElementById('root')!).render(<MainApp />);
+class ErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: string }
+> {
+  state = { error: '' };
+  static getDerivedStateFromError(error: Error) {
+    return { error: error.message };
+  }
+  render() {
+    if (this.state.error)
+      return (
+        <main className="fatal">
+          <h1>工作台遇到错误</h1>
+          <p>{this.state.error}</p>
+          <p>已保存的项目仍在此浏览器中。</p>
+          <button onClick={() => location.reload()}>重新加载</button>
+        </main>
+      );
+    return this.props.children;
+  }
+}
+createRoot(document.getElementById('root')!).render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>,
+);

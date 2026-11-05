@@ -1,0 +1,44 @@
+[
+  {
+    "id": "decoder-396-fp32",
+    "sha256": "3e10fd5ae52d0b86792721922fcd954c283a7ed365de7446425bdabe38f3e57d",
+    "bytes": 47299551,
+    "path": "3e10fd5ae52d0b86792721922fcd954c283a7ed365de7446425bdabe38f3e57d/decoder_pytorch_model_396-f6feedb42ff90087d898b0941a55d040fa6b2903.onnx"
+  },
+  {
+    "id": "encoder-396-fp32",
+    "sha256": "4c16df852b3789f2676b0d49f0545dab0740e4005f7b472c5252add642f5d5eb",
+    "bytes": 52861122,
+    "path": "4c16df852b3789f2676b0d49f0545dab0740e4005f7b472c5252add642f5d5eb/encoder_pytorch_model_396-f6feedb42ff90087d898b0941a55d040fa6b2903.onnx"
+  },
+  {
+    "id": "ppocr-v2-cls-mobile",
+    "sha256": "e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c",
+    "bytes": 585532,
+    "path": "e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c/ch_ppocr_mobile_v2.0_cls_mobile.onnx"
+  },
+  {
+    "id": "ppocr-v6-det-small",
+    "sha256": "090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f",
+    "bytes": 9929594,
+    "path": "090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f/PP-OCRv6_det_small.onnx"
+  },
+  {
+    "id": "ppocr-v6-rec-small",
+    "sha256": "6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884",
+    "bytes": 21234383,
+    "path": "6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884/PP-OCRv6_rec_small.onnx"
+  },
+  {
+    "id": "segnet-308-fp32",
+    "sha256": "6ed36640db4ef5d223098b6d5efe4eda97c66b24a2c72faab8a018c749003a8d",
+    "bytes": 57311361,
+    "path": "6ed36640db4ef5d223098b6d5efe4eda97c66b24a2c72faab8a018c749003a8d/segnet_308-3296ccd40960f90ca6ab9c035cca945675d30a0f.onnx"
+  },
+  {
+    "id": "tab-digits-1",
+    "sha256": "037fac028e121b4d133e5f6bcd1099a1914e692e68ed90f7d3e1bb94d5bdcda3",
+    "bytes": 471919,
+    "path": "037fac028e121b4d133e5f6bcd1099a1914e692e68ed90f7d3e1bb94d5bdcda3/tab-digits-037fac028e12.onnx"
+  }
+]

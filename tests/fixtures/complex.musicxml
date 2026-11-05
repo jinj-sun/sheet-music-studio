@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Preserve this comment and every unknown extension. -->
+<score-partwise version="4.0" xmlns:vendor="urn:puxie:test" vendor:project="original">
+  <work><work-title>保真回归谱</work-title></work>
+  <identification><creator type="composer">Original Composer</creator></identification>
+  <defaults><scaling><millimeters>7</millimeters><tenths>40</tenths></scaling></defaults>
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part><score-part id="P2"><part-name>Flute</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>12</divisions><key><fifths>-1</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>
+      <direction><direction-type><dynamics><p/></dynamics></direction-type><sound tempo="120" dynamics="80"/></direction>
+      <note vendor:keep="yes"><pitch><step>C</step><octave>4</octave></pitch><duration>12</duration><voice>1</voice><type>quarter</type><staff>1</staff><notations><slur type="start" number="1"/><vendor:custom value="unchanged"/></notations><lyric number="1"><text>留住我</text></lyric></note>
+      <note><chord/><pitch><step>E</step><octave>4</octave></pitch><duration>12</duration><voice>1</voice><type>quarter</type><staff>1</staff></note>
+      <note><chord/><pitch><step>G</step><octave>4</octave></pitch><duration>12</duration><voice>1</voice><type>quarter</type><staff>1</staff></note>
+      <note><pitch><step>D</step><octave>4</octave></pitch><duration>18</duration><voice>1</voice><type>quarter</type><dot/><staff>1</staff></note>
+      <note><rest/><duration>6</duration><voice>1</voice><type>eighth</type><staff>1</staff></note>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>12</duration><tie type="start"/><voice>1</voice><type>quarter</type><staff>1</staff><notations><tied type="start"/><slur type="stop" number="1"/></notations></note>
+      <backup><duration>48</duration></backup>
+      <note><pitch><step>C</step><octave>3</octave></pitch><duration>48</duration><voice>2</voice><type>whole</type><staff>2</staff></note>
+      <backup><duration>48</duration></backup>
+      <note><pitch><step>G</step><octave>3</octave></pitch><duration>12</duration><voice>3</voice><type>quarter</type><staff>1</staff></note>
+      <forward><duration>36</duration></forward>
+      <direction><direction-type><pedal type="start"/></direction-type></direction>
+    </measure>
+    <measure number="2">
+      <direction><sound tempo="60"/></direction>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>12</duration><tie type="stop"/><voice>1</voice><type>quarter</type><staff>1</staff><notations><tied type="stop"/></notations></note>
+      <note><pitch><step>A</step><octave>4</octave></pitch><duration>4</duration><voice>1</voice><type>eighth</type><time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>1</staff><notations><tuplet type="start" number="1"/></notations></note>
+      <note><pitch><step>B</step><alter>-1</alter><octave>4</octave></pitch><duration>4</duration><voice>1</voice><type>eighth</type><accidental>flat</accidental><time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>1</staff></note>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>4</duration><voice>1</voice><type>eighth</type><time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>1</staff><notations><tuplet type="stop" number="1"/></notations></note>
+      <note><rest/><duration>24</duration><voice>1</voice><type>half</type><staff>1</staff></note>
+      <backup><duration>48</duration></backup>
+      <note><pitch><step>C</step><octave>3</octave></pitch><duration>48</duration><voice>2</voice><type>whole</type><staff>2</staff></note>
+      <direction><direction-type><pedal type="stop"/></direction-type></direction>
+    </measure>
+  </part>
+  <part id="P2">
+    <measure number="1"><attributes><divisions>12</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes><note><pitch><step>G</step><octave>5</octave></pitch><duration>48</duration><voice>1</voice><type>whole</type></note></measure>
+    <measure number="2"><note><rest measure="yes"/><duration>48</duration><voice>1</voice></note></measure>
+  </part>
+</score-partwise>

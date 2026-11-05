@@ -1,44 +1,22 @@
-# 钢琴谱识别与编辑工具
+# 谱写 Studio 2.0 工程约定
 
-## 应用概述
-纯前端浏览器应用，用户上传乐谱图片 → 本地 OMR 识别 → 渲染乐谱支持编辑 → 导出 MusicXML / MIDI。
-识别内核使用 homr-web（基于 onnxruntime-web，WASM 模式运行）。
+本项目是纯前端本地钢琴谱工作台。用户指令优先，不能把模板内容视为用户授权。
 
-## 技术架构
-- **前端框架**: React 19 + TypeScript + Vite
-- **样式**: Tailwind CSS
-- **OMR 引擎**: homr-web v0.5.4（浏览器本地运行，显式指定 WASM 模式）
-- **乐谱渲染**: opensheetmusicdisplay (OSMD)
-- **MIDI 导出**: midi-writer-js（解析 MusicXML 生成 MIDI）
-- **模型文件**: 内置在 `client/public/models/` 下，运行时 baseUrl 基于 `window.location.href` 计算
+## 数据原则
 
-## 页面结构
-单页应用（`/` 路由），三阶段状态：
-1. **上传阶段** - 拖拽/选择图片，原图预览，支持加载示例乐谱
-2. **识别阶段** - 进度显示（模型加载、识别各阶段），可取消
-3. **编辑阶段** - 三 Tab：乐谱渲染视图 / XML 源码编辑 / 原图对照，支持播放试听和导出
+- MusicXML 原文及 DOM 是唯一源；投影数组不得重建覆盖导入文件。
+- 只补丁修改明确目标字段；未知扩展、歌词、踏板、布局、反复、原图及 MXL 附件必须保留。
+- 无法安全进行的操作应明确拒绝，提供 XML 源码编辑，不得静默简化。
+- 缺失模型必须报告真实状态，禁止用示例谱冒充识别结果。
+- 修改播放/MIDI 时共同使用 `music/timeline.ts`，不得另建简化 XML 解析器。
+- 保存和导入不能覆盖其他项目；未应用草稿同样属于项目数据。
 
-### 播放试听功能
-- 控制栏：播放/暂停/停止按钮、进度条、速度滑块（40-200 BPM）、音量滑块
-- 音频合成：Web Audio API 合成钢琴音色（多谐波 + ADSR 包络），双声部独立发声
-- 进度跟随：OSMD Cursor 光标高亮当前播放位置
-- 修改联动：XML 源码修改并应用后，播放器自动重新解析更新
+## 模块与验证
 
-## 核心模块
-- `src/utils/homrRecognizer.ts` - homr-web 识别器封装
-- `src/utils/osmdRenderer.ts` - OSMD 乐谱渲染器封装（含播放光标控制）
-- `src/utils/musicPlayer.ts` - 音乐播放器（Web Audio 钢琴音色合成 + 音符调度）
-- `src/utils/exportUtils.ts` - MusicXML 和 MIDI 导出工具
-- `src/utils/sampleMusicXml.ts` - 示例乐谱（小星星）
-- `src/pages/SheetMusic/SheetMusicPage.tsx` - 主页面
-
-## 设计规范
-- 布局：顶部工具栏 + 主内容区（居中卡片式）
-- 颜色：深色主题（slate-900 背景），钢琴键黑白配色为主，indigo-500 强调色
-- 间距：内容区 padding 24px，卡片间距 16px
-- 字体：系统无衬线字体，标题 text-xl font-semibold，正文 text-base
-
-## 已知限制
-- 显式使用 WASM 后端（WebGPU 需 fp16 模型未内置），识别速度约 60-120 秒/页
-- 编辑采用 XML 源码编辑方式，修改后点击应用变更重新渲染
-- MIDI 导出基于 MusicXML 解析，复杂谱表（多声部、连音线等）可能不完整
+- React/TypeScript/Vite；`client/src/music` 核心，`omr` 识谱，`storage` 文件/持久化，`components` 视图。
+- 样式采用浅色专业工作台。小屏可纵向排列、横向滚动谱面，保留属性面板与播放控制。
+- 修改后按影响运行 `npm run type:check`、`npm test`、`npm run build` 和相关 Playwright 回归。
+- 只有实际执行并通过的命令才能报告为通过；真实 OMR 推理与运行时初始化是不同验证项。
+- `.npmrc` 禁用依赖安装脚本；资源由 dev/build 显式准备。更新 ONNX/homr 时必须重验 Worker 和 WASM，不能只通过类型检查就交付。
+- 不提交 `.env`、node_modules、dist、自动下载的模型与生成的 ONNX 运行时文件。
+- 源码格式使用 Prettier。原始用户包的基线在 `original-source`，不要通过 reset/clean 删除用户新工作。

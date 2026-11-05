@@ -62,3 +62,15 @@ pnpm-lock.yaml
 
 # Agent files
 .agent/
+
+.env
+.env.*
+!.env.example
+test-results/
+playwright-report/
+client/public/omr-runtime/
+client/public/models/*.onnx
+client/public/models/*.bin
+
+client/public/models/**/*.onnx
+client/public/models/**/*.download
