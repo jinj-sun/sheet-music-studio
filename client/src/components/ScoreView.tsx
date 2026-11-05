@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   OpenSheetMusicDisplay,
   VexFlowGraphicalNote,
+  VexFlowVoiceEntry,
 } from 'opensheetmusicdisplay';
 import {
   type Score,
@@ -12,20 +13,72 @@ import {
   child,
   make,
 } from '../music/score';
+import { isBeamSuppressed } from '../music/beams';
+
+function respectClearedBeams(osmd: OpenSheetMusicDisplay, notes: ScoreNote[]) {
+  if (!notes.length) return;
+  const suppressed = new Map<string, number[]>();
+  for (const n of notes) {
+    const key = `${n.measureIndex}/${n.partIndex}/${n.staff}/${n.voice}`;
+    const onsets = suppressed.get(key) || [];
+    onsets.push(n.onset);
+    suppressed.set(key, onsets);
+  }
+  // OSMD 2.2.1 accepts an exclusion list when generating automatic beams.
+  // Extend it on these SVG measure instances to keep explicitly cleared notes flagged.
+  type StemmableNote = VexFlowVoiceEntry['vfStaveNote'];
+  for (const [index, measures] of osmd.GraphicSheet.MeasureList.entries()) {
+    for (const measure of measures) {
+      const staff = measure.ParentStaff;
+      if (!staff) continue;
+      const instrument = staff.ParentInstrument;
+      const part = osmd.Sheet.Instruments.indexOf(instrument);
+      const staffIndex = instrument.Staves.indexOf(staff) + 1;
+      const excluded = measure.staffEntries.flatMap(
+        (entry) =>
+          entry.graphicalVoiceEntries.filter((voice) => {
+            const source = voice.parentVoiceEntry;
+            const key = `${index}/${part}/${staffIndex}/${source.ParentVoice.VoiceId}`;
+            return (
+              !source.IsGrace &&
+              suppressed
+                .get(key)
+                ?.some(
+                  (onset) =>
+                    Math.abs(onset - source.Timestamp.RealValue * 4) < 1e-6,
+                )
+            );
+          }) as VexFlowVoiceEntry[],
+      );
+      if (!excluded.length) continue;
+      const renderer = measure as unknown as {
+        autoBeamNotes(notes: StemmableNote[]): void;
+      };
+      const autoBeam = renderer.autoBeamNotes;
+      renderer.autoBeamNotes = (beamed) => {
+        const notes = excluded
+          .map((entry) => entry.vfStaveNote)
+          .filter(Boolean);
+        autoBeam.call(renderer, [...beamed, ...notes]);
+      };
+    }
+  }
+}
+
 interface Props {
   score: Score;
   zoom: number;
-  selected: string;
+  selection: string[];
   beat: number | null;
   checked: string[];
   followPlayback: boolean;
   jump: { measure: number } | null;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, extend: boolean) => void;
 }
 export default function ScoreView({
   score,
   zoom,
-  selected,
+  selection,
   beat,
   checked,
   followPlayback,
@@ -76,6 +129,7 @@ export default function ScoreView({
       try {
         const lib = await import('opensheetmusicdisplay');
         if (cancelled) return;
+        const clearedNotes = score.notes.filter(isBeamSuppressed);
         const osmd = new lib.OpenSheetMusicDisplay(host, {
           backend: 'svg',
           autoResize: false,
@@ -86,7 +140,8 @@ export default function ScoreView({
           drawingParameters: 'default',
           followCursor: false,
           newSystemFromNewPageInXML: true,
-          autoBeam: true,
+          // Install the exclusions before auto-beaming can hide any flags.
+          autoBeam: !clearedNotes.length,
           autoBeamOptions: {
             beam_rests: false,
             maintain_stem_directions: false,
@@ -110,6 +165,8 @@ export default function ScoreView({
           osmd.clear();
           return;
         }
+        respectClearedBeams(osmd, clearedNotes);
+        osmd.EngravingRules.AutoBeamNotes = true;
         for (const [
           measureIndex,
           measure,
@@ -194,7 +251,8 @@ export default function ScoreView({
                     target.classList.add('score-note');
                     target.addEventListener('click', (event) => {
                       event.stopPropagation();
-                      select.current(n.id);
+                      const click = event as MouseEvent;
+                      select.current(n.id, click.ctrlKey || click.metaKey);
                     });
                     target.addEventListener('keydown', (event) => {
                       if (
@@ -202,7 +260,7 @@ export default function ScoreView({
                         ['Enter', ' '].includes(event.key)
                       ) {
                         event.preventDefault();
-                        select.current(n.id);
+                        select.current(n.id, event.ctrlKey || event.metaKey);
                       }
                     });
                     mapped.set(n.id, target);
@@ -253,12 +311,13 @@ export default function ScoreView({
   }, [jump, revision, score]);
   useEffect(() => {
     const done = new Set(checked);
+    const selected = new Set(selection);
     for (const [id, element] of targets.current) {
-      element.classList.toggle('selected-note', selected === id);
+      element.classList.toggle('selected-note', selected.has(id));
       element.classList.toggle('checked-note', done.has(id));
-      element.setAttribute('aria-pressed', String(selected === id));
+      element.setAttribute('aria-pressed', String(selected.has(id)));
     }
-  }, [selected, checked, revision]);
+  }, [selection, checked, revision]);
   useEffect(() => {
     const active = new Set<string>();
     if (beat !== null) {

@@ -167,6 +167,78 @@ function notationDuration(n: ScoreNote, type: NoteType, dots: number) {
   }
   child(n.element, 'rest')?.removeAttribute('measure');
 }
+export function moveNote(xml: string, id: string, onset: number) {
+  return transaction(xml, (score) => {
+    const note = find(score, id);
+    const tones = group(score, note);
+    const root = tones[0];
+    const measure = score.parts[root.partIndex].measures[root.measureIndex];
+    const delta = onset - root.onset;
+    const end = onset + root.duration;
+    if (
+      !Number.isFinite(onset) ||
+      onset < 0 ||
+      end > Math.min(measure.nominal, measure.duration) + EPS
+    )
+      throw new Error('起拍与音符时值必须落在当前小节内');
+    if (Math.abs(delta) < EPS) return;
+    guardStructure(measure);
+    if (
+      tones.some(
+        (tone, i) =>
+          tone.grace ||
+          tone.cue ||
+          tone.staff !== root.staff ||
+          (i > 0 && tones[i - 1].element.nextElementSibling !== tone.element) ||
+          ['beam', 'tie', 'time-modification'].some((tag) =>
+            child(tone.element, tag),
+          ) ||
+          kids(tone.element, 'notations').some((element) =>
+            ['slur', 'tied', 'tuplet'].some((tag) => child(element, tag)),
+          ),
+      )
+    )
+      throw new Error(
+        '带连线、连梁或复杂结构的音符，请先解除相关记号或在 XML 中移动',
+      );
+
+    for (const other of measure.notes) {
+      if (
+        tones.includes(other) ||
+        other.staff !== root.staff ||
+        other.voice !== root.voice
+      )
+        continue;
+      const sameStart = Math.abs(other.onset - root.onset) < EPS;
+      if (sameStart && other.grace)
+        throw new Error('请在 XML 中同时移动音符及其倚音');
+      const precedes =
+        other.onset < root.onset - EPS ||
+        (sameStart && other.noteIndex < root.noteIndex);
+      if (
+        precedes
+          ? other.onset + other.duration > onset + EPS
+          : other.onset < end - EPS
+      )
+        throw new Error(
+          '请选择同声部相邻音符之间的空拍，或先修正前一个音符的时值',
+        );
+    }
+
+    // Restore the cursor immediately after this chord so other event anchors stay put.
+    const shift = (tag: 'forward' | 'backup') =>
+      movement(measure.element, tag, Math.abs(delta), root.divisions);
+    measure.element.insertBefore(
+      shift(delta > 0 ? 'forward' : 'backup'),
+      root.element,
+    );
+    measure.element.insertBefore(
+      shift(delta > 0 ? 'backup' : 'forward'),
+      tones.at(-1)!.element.nextSibling,
+    );
+  });
+}
+
 export function changeRhythm(
   xml: string,
   id: string,

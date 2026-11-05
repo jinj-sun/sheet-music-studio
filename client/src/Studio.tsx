@@ -108,7 +108,9 @@ export default function Studio() {
   const imageViewport = useRef<HTMLDivElement>(null);
   const newImageTask = useRef(false);
   const readingImages = useRef(false);
-  const [selected, setSelected] = useState('');
+  const [selection, setSelection] = useState<string[]>([]);
+  const [multiSelect, setMultiSelect] = useState(false);
+  const selected = selection.at(-1) || '';
   const [zoom, setZoom] = useState(1),
     [imageZoom, setImageZoom] = useState(1);
   const [insertOpen, setInsertOpen] = useState(false);
@@ -199,9 +201,8 @@ export default function Studio() {
         )
       : score.notes;
   }, [score, view, page, mappedPages]);
-  const selectScoreNote = useCallback(
+  const showNotePage = useCallback(
     (id: string) => {
-      setSelected(id);
       const n = score?.notes.find((n) => n.id === id);
       const target =
         n &&
@@ -214,13 +215,35 @@ export default function Studio() {
     },
     [score, mappedPages],
   );
+  const selectScoreNote = useCallback(
+    (id: string) => {
+      setSelection([id]);
+      showNotePage(id);
+    },
+    [showNotePage],
+  );
+  const selectClickedNote = useCallback(
+    (id: string, extend: boolean) => {
+      if (!extend && !multiSelect) {
+        selectScoreNote(id);
+        return;
+      }
+      const next = selection.includes(id)
+        ? selection.filter((selectedId) => selectedId !== id)
+        : [...selection, id];
+      setSelection(next);
+      const last = next.at(-1);
+      if (last) showNotePage(last);
+    },
+    [multiSelect, selection, selectScoreNote, showNotePage],
+  );
   function selectPage(index: number) {
     const p = pages[index];
     if (!p) return;
     setPageId(p.id);
     if (p.range && mappedPages.includes(p)) {
       const first = score?.notes.find((n) => n.measureIndex === p.range!.start);
-      if (first) setSelected(first.id);
+      if (first) setSelection([first.id]);
       setScoreJump({ measure: p.range.start });
     }
   }
@@ -279,7 +302,9 @@ export default function Studio() {
       active.current = p;
       setProject(p);
       setHistory(createHistory(p.xml));
-      setSelected(p.xml ? parseScore(p.xml).notes[0]?.id || '' : '');
+      const firstNote = p.xml ? parseScore(p.xml).notes[0] : undefined;
+      setSelection(firstNote ? [firstNote.id] : []);
+      setMultiSelect(false);
       const firstPage = projectPages(p)[0];
       setPageId(firstPage?.id || '');
       setScoreJump(null);
@@ -401,7 +426,7 @@ export default function Studio() {
       return false;
     }
   }
-  function applyXml(xml: string, nextHistory?: History) {
+  function applyXml(xml: string, nextHistory?: History, keepSelection = false) {
     if (!project) return;
     const parsed = parseScore(xml);
     const previous = score?.notes || [];
@@ -423,14 +448,21 @@ export default function Studio() {
     setHistory(
       nextHistory || pushHistory(history || createHistory(project.xml), xml),
     );
-    if (!parsed.notes.some((n) => n.id === selected))
-      setSelected(parsed.notes[0]?.id || '');
+    if (!keepSelection || !sameCount) {
+      const current =
+        parsed.notes.find((n) => n.id === selected) || parsed.notes[0];
+      setSelection(current ? [current.id] : []);
+    }
     setError('');
   }
-  function command(action: (xml: string) => string, success: string) {
+  function command(
+    action: (xml: string) => string,
+    success: string,
+    keepSelection = false,
+  ) {
     if (!project || busy) return;
     try {
-      applyXml(action(project.xml));
+      applyXml(action(project.xml), undefined, keepSelection);
       setNotice(success);
     } catch (e) {
       fail(e);
@@ -696,7 +728,8 @@ export default function Studio() {
         active.current = null;
         setProject(null);
         setHistory(null);
-        setSelected('');
+        setSelection([]);
+        setMultiSelect(false);
         setPageId('');
         setScoreJump(null);
       }
@@ -1707,12 +1740,12 @@ export default function Studio() {
                           <ScoreView
                             score={score}
                             zoom={zoom}
-                            selected={selected}
+                            selection={selection}
                             beat={playing ? beat : null}
                             checked={project.checked}
                             followPlayback={followPlayback}
                             jump={scoreJump}
-                            onSelect={selectScoreNote}
+                            onSelect={selectClickedNote}
                           />
                         ) : (
                           <div className="empty-score">
@@ -1735,15 +1768,24 @@ export default function Studio() {
                   <div className="note-ledger">
                     <div>
                       <strong>逐音符校对</strong>
-                      <span>
-                        可使用属性面板的前后按钮。和弦中的每个音可独立选择。
-                      </span>
+                      <span>按住 Ctrl / ⌘ 点选，或打开多选后逐个点选。</span>
+                      <button
+                        className={multiSelect ? 'active' : ''}
+                        aria-pressed={multiSelect}
+                        disabled={busy}
+                        onClick={() => {
+                          setSelection(multiSelect ? selection.slice(-1) : []);
+                          setMultiSelect(!multiSelect);
+                        }}
+                      >
+                        多选音符
+                      </button>
                     </div>
                     <NoteStrip
                       notes={stripNotes}
-                      selected={selected}
+                      selection={selection}
                       checked={project.checked}
-                      onSelect={selectScoreNote}
+                      onSelect={selectClickedNote}
                     />
                   </div>
                 )}
@@ -1753,6 +1795,7 @@ export default function Studio() {
                   key={project.id}
                   score={score}
                   note={note}
+                  selection={selection}
                   disabled={busy}
                   checked={project.checked}
                   insertOpen={insertOpen}

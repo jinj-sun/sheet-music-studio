@@ -898,8 +898,14 @@ select {
 .note-ledger > div:first-child {
   display: flex;
   align-items: center;
-  gap: 13px;
+  flex-wrap: wrap;
+  gap: 5px 10px;
   margin-bottom: 8px;
+}
+.note-ledger > div:first-child > button {
+  min-height: 24px;
+  padding: 2px 7px;
+  font-size: 10px;
 }
 .note-ledger strong {
   font-size: 10px;

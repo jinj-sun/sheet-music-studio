@@ -12,6 +12,7 @@ import {
 import {
   changePitch,
   changeRhythm,
+  moveNote,
   makeRest,
   addChordTone,
   insertNote,
@@ -19,16 +20,28 @@ import {
   toggleSlur,
   deleteNote,
 } from '../music/editor';
-import { joinBeam, clearBeam } from '../music/beams';
+import {
+  joinBeam,
+  clearBeam,
+  joinSelectedBeams,
+  clearSelectedBeams,
+  previewBeamAlignment,
+  alignAndJoinSelectedBeams,
+} from '../music/beams';
 import FingeringEditor from './FingeringEditor';
 interface Props {
   score: Score;
   note?: ScoreNote;
+  selection: string[];
   checked: string[];
   disabled: boolean;
   insertOpen: boolean;
   onSelect: (id: string) => void;
-  onCommand: (action: (xml: string) => string, message: string) => void;
+  onCommand: (
+    action: (xml: string) => string,
+    message: string,
+    keepSelection?: boolean,
+  ) => void;
   onCheck: (id: string) => void;
 }
 const TYPE_LABELS: Record<NoteType, string> = {
@@ -44,6 +57,7 @@ const TYPE_LABELS: Record<NoteType, string> = {
 export default function NoteInspector({
   score,
   note,
+  selection,
   checked,
   disabled,
   insertOpen,
@@ -64,6 +78,7 @@ export default function NoteInspector({
     [rest, setRest] = useState(false);
   const [slurStart, setSlurStart] = useState('');
   const [ripple, setRipple] = useState(false);
+  const [moveOnset, setMoveOnset] = useState('');
   useEffect(() => {
     if (note) {
       setStep(note.step);
@@ -76,6 +91,7 @@ export default function NoteInspector({
       setPart(note.partIndex);
       setMeasure(note.measureIndex);
       setOnset(note.onset);
+      setMoveOnset(String(note.onset));
       setRest(note.rest);
     }
   }, [note]);
@@ -95,6 +111,18 @@ export default function NoteInspector({
     [score],
   );
   const index = ordered.findIndex((n) => n.id === note?.id);
+  const nextNote = index >= 0 ? ordered[index + 1] : undefined;
+  const isChecked = note ? checked.includes(note.id) : false;
+  const multiple = selection.length > 1;
+  const beamMoves = useMemo(() => {
+    if (selection.length < 2) return [];
+    try {
+      return previewBeamAlignment(score, selection);
+    } catch {
+      return [];
+    }
+  }, [score, selection]);
+  const lastBeamMove = beamMoves.at(-1);
   return (
     <aside className="inspector" aria-label="音符属性面板">
       <div className="panel-heading">
@@ -110,6 +138,7 @@ export default function NoteInspector({
               <small>
                 第 {note.measureIndex + 1} 小节 · 谱表 {note.staff} · 声部{' '}
                 {note.voice}
+                {multiple && ` · 已选 ${selection.length} 个音符`}
               </small>
             </div>
           </div>
@@ -126,8 +155,8 @@ export default function NoteInspector({
             </span>
             <button
               aria-label="下一音符"
-              disabled={index < 0 || index >= ordered.length - 1}
-              onClick={() => onSelect(ordered[index + 1].id)}
+              disabled={!nextNote}
+              onClick={() => nextNote && onSelect(nextNote.id)}
             >
               <ChevronRight size={16} />
             </button>
@@ -279,27 +308,96 @@ export default function NoteInspector({
               disabled={!note}
               onClick={() =>
                 onCommand(
-                  (xml) => joinBeam(xml, note!.id),
-                  '已与下一音连梁，音高与时值保持不变',
+                  (xml) =>
+                    multiple
+                      ? joinSelectedBeams(xml, selection)
+                      : joinBeam(xml, note!.id),
+                  multiple
+                    ? '已为所选音符添加连梁'
+                    : '已与下一音连梁，音高与时值保持不变',
+                  true,
                 )
               }
             >
-              与下一音符连梁
+              {multiple ? '添加所选连梁' : '与下一音符连梁'}
             </button>
             <button
               disabled={!note}
               onClick={() =>
                 onCommand(
-                  (xml) => clearBeam(xml, note!.id),
-                  '已清除当前手工连梁；未指定连梁的音符采用自动排版',
+                  (xml) =>
+                    multiple
+                      ? clearSelectedBeams(xml, selection)
+                      : clearBeam(xml, note!.id),
+                  multiple ? '已清除所选连梁' : '已清除当前连梁',
+                  true,
                 )
               }
             >
-              清除手工连梁
+              {multiple ? '清除所选连梁' : '清除当前连梁'}
             </button>
           </div>
           <p className="hint">
-            横梁连接的八分音符和带单独符尾的八分音符时值相同。可依次选择组内音符扩展连梁，导出保留手工分组。
+            选择同一小节、同一谱表及同一声部的连续短音符来添加连梁。一个和弦算一个位置。
+          </p>
+          {lastBeamMove && (
+            <>
+              <p className="hint">
+                所选音组中有{' '}
+                {Number(
+                  (lastBeamMove.note.onset - lastBeamMove.onset).toFixed(4),
+                )}{' '}
+                拍空隙。贴齐会固定第一个位置，将后续 {beamMoves.length}{' '}
+                个所选音符或和弦向前移动，时值和其他音符起拍保持原位。
+              </p>
+              <button
+                className="full"
+                onClick={() =>
+                  onCommand(
+                    (xml) => alignAndJoinSelectedBeams(xml, selection),
+                    '所选音符已贴齐起拍并连梁',
+                    true,
+                  )
+                }
+              >
+                贴齐起拍并连梁
+              </button>
+            </>
+          )}
+          <div className="form-row">
+            <label>
+              起拍（从 0 起）
+              <input
+                type="number"
+                min={0}
+                step="any"
+                aria-label="音符起拍"
+                value={moveOnset}
+                disabled={!note || multiple}
+                onChange={(e) => setMoveOnset(e.target.value)}
+              />
+            </label>
+            <button
+              disabled={
+                !note ||
+                multiple ||
+                !moveOnset.trim() ||
+                Number(moveOnset) === note.onset
+              }
+              onClick={() =>
+                onCommand(
+                  (xml) => moveNote(xml, note!.id, Number(moveOnset)),
+                  '起拍已更新',
+                )
+              }
+            >
+              移动起拍
+            </button>
+          </div>
+          <p className="hint">
+            {multiple
+              ? '单独移动起拍时，请先选中一个音符或和弦音。'
+              : '可把当前音符或和弦移到本小节同声部的空拍。'}
           </p>
         </section>
         <FingeringEditor score={score} note={note} onCommand={onCommand} />
@@ -474,11 +572,14 @@ export default function NoteInspector({
       {note && (
         <button
           disabled={disabled}
-          className={`check-button full ${checked.includes(note.id) ? 'checked' : ''}`}
-          onClick={() => onCheck(note.id)}
+          className={`check-button full ${isChecked ? 'checked' : ''}`}
+          onClick={() => {
+            onCheck(note.id);
+            if (!isChecked && nextNote) onSelect(nextNote.id);
+          }}
         >
           <Check size={16} />
-          {checked.includes(note.id) ? '已校对 · 点击取消标记' : '标记已校对'}
+          {isChecked ? '已校对 · 点击取消标记' : '标记已校对'}
         </button>
       )}
     </aside>

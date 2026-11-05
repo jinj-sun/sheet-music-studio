@@ -47,6 +47,26 @@ test('welcome, piano creation, SVG selection, pitch, chord, undo/redo and persis
   await expect(page.getByText('1 / 9 已校对')).toBeVisible();
   expect(errors).toEqual([]);
 });
+test('marking a note reviewed advances in order and stops at the last note', async ({
+  page,
+}) => {
+  await create(page);
+  const navigation = page.locator('.note-navigation');
+  const mark = page.getByRole('button', { name: '标记已校对', exact: true });
+
+  await mark.click();
+  await expect(navigation).toContainText('2 / 8');
+  await navigation.getByRole('button', { name: '上一音符' }).click();
+  await page.getByRole('button', { name: '已校对 · 点击取消标记' }).click();
+  await expect(navigation).toContainText('1 / 8');
+  await expect(page.getByText('0 / 8 已校对')).toBeVisible();
+
+  for (let index = 1; index <= 8; index++) {
+    await mark.click();
+    await expect(navigation).toContainText(`${Math.min(index + 1, 8)} / 8`);
+  }
+  await expect(page.getByText('8 / 8 已校对')).toBeVisible();
+});
 test('XML draft errors preserve applied score and survive refresh', async ({
   page,
 }) => {
@@ -229,6 +249,129 @@ test('manual beams and ripple correction are editable, undoable and retain the o
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   xml = await page.getByLabel('MusicXML 源码', { exact: true }).inputValue();
   expect(xml).toContain('<duration>360</duration>');
+});
+
+test('multi-select adds and clears visible beams for a chord and adjacent notes', async ({
+  page,
+}) => {
+  const xml = readFileSync(
+    'tests/fixtures/piano-rhythm.musicxml',
+    'utf8',
+  ).replace(
+    '</lyric></note>',
+    '</lyric></note><note><chord/><pitch><step>A</step><octave>4</octave></pitch><duration>240</duration><voice>1</voice><type>eighth</type><staff>1</staff></note>',
+  );
+  await page.getByTestId('score-file-input').setInputFiles({
+    name: 'beam-group.musicxml',
+    mimeType: 'application/xml',
+    buffer: Buffer.from(xml),
+  });
+  const paper = page.getByTestId('score-paper');
+  const note = (index: number) =>
+    paper.locator(`[data-note-id="p0m0n${index}"]`);
+  const flag = (index: number) =>
+    note(index).locator('xpath=..').locator('.vf-flag');
+  await expect(note(4)).toBeVisible();
+  await expect(flag(3)).toHaveCount(0);
+  await expect(flag(7)).toBeVisible();
+
+  await note(4).click();
+  await note(6).click({ modifiers: ['Control'] });
+  await note(7).click({ modifiers: ['Control'] });
+  await expect(paper.locator('.selected-note')).toHaveCount(3);
+  await page.getByRole('button', { name: '添加所选连梁' }).click();
+  await expect(paper.locator('.selected-note')).toHaveCount(3);
+  await expect(flag(7)).toHaveCount(0);
+
+  await page.getByRole('button', { name: '清除所选连梁' }).click();
+  for (const index of [3, 6, 7]) await expect(flag(index)).toBeVisible();
+  await expect(flag(1)).toHaveCount(0);
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect(note(7)).toBeVisible();
+  await expect(flag(7)).toHaveCount(0);
+  await page.getByRole('button', { name: '重做', exact: true }).click();
+  await expect(flag(7)).toBeVisible();
+  await expect(
+    page.getByText('已保存到此浏览器', { exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(flag(3)).toBeVisible();
+
+  await page.getByRole('button', { name: '多选音符' }).click();
+  await page.getByRole('button', { name: /^选择 A4 小节1.*第5音$/ }).click();
+  await page.getByRole('button', { name: /^选择 G4 小节1.*第7音$/ }).click();
+  await expect(paper.locator('.selected-note')).toHaveCount(2);
+  await page.getByRole('button', { name: /^选择 G4 小节1.*第7音$/ }).click();
+  await expect(paper.locator('.selected-note')).toHaveCount(1);
+});
+
+test('moves a note to a free beat and can undo its position', async ({
+  page,
+}) => {
+  await page
+    .getByTestId('score-file-input')
+    .setInputFiles(resolve('tests/fixtures/piano-rhythm.musicxml'));
+  await page
+    .getByTestId('score-paper')
+    .locator('[data-note-id="p0m0n3"]')
+    .click();
+  const start = page.getByLabel('音符起拍', { exact: true });
+  const note = page.getByRole('button', { name: /^选择 E4 小节1/ });
+  await start.fill('1.25');
+  await page.getByRole('button', { name: '移动起拍' }).click();
+  await expect(page.getByRole('alert')).toContainText('空拍');
+  await page.getByLabel('音符时值', { exact: true }).selectOption('16th');
+  await page.getByRole('button', { name: '应用时值', exact: true }).click();
+  await start.fill('1.25');
+  await page.getByRole('button', { name: '移动起拍' }).click();
+  await expect(note).toContainText('1:2.25');
+  await expect(
+    page.getByTestId('score-paper').locator('[data-note-id="p0m0n3"]'),
+  ).toBeVisible();
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect(start).toHaveValue('1');
+});
+
+test('aligns and beams a gapped selection without changing the other hand', async ({
+  page,
+}) => {
+  const xml = readFileSync('tests/fixtures/piano-rhythm.musicxml', 'utf8')
+    .replace(
+      '<duration>240</duration><voice>1</voice><type>eighth</type><staff>1</staff><lyric>',
+      '<duration>120</duration><voice>1</voice><type>16th</type><staff>1</staff><lyric>',
+    )
+    .replace(
+      '</lyric></note>',
+      '</lyric></note><note><chord/><pitch><step>A</step><octave>4</octave></pitch><duration>120</duration><voice>1</voice><type>16th</type><staff>1</staff></note><forward><duration>120</duration></forward>',
+    );
+  await page.getByTestId('score-file-input').setInputFiles({
+    name: 'gapped-beam.musicxml',
+    mimeType: 'application/xml',
+    buffer: Buffer.from(xml),
+  });
+  const paper = page.getByTestId('score-paper');
+  const note = (i: number) => paper.locator(`[data-note-id="p0m0n${i}"]`);
+  const target = page.getByRole('button', { name: /^选择 G4 小节1/ });
+  const leftHand = page.getByRole('button', { name: /^选择 G3 小节1.*第6音$/ });
+  await note(3).click();
+  await note(4).click({ modifiers: ['Control'] });
+  await note(6).click({ modifiers: ['Control'] });
+  await expect(target).toContainText('1:2.5');
+  await expect(leftHand).toContainText('1:2');
+  await expect(page.getByText(/所选音组中有 0\.25 拍空隙/)).toBeVisible();
+  await page.getByRole('button', { name: '添加所选连梁' }).click();
+  await expect(page.getByRole('alert')).toContainText('空隙');
+  await expect(target).toContainText('1:2.5');
+  await page.getByRole('button', { name: '贴齐起拍并连梁' }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(paper.locator('.selected-note')).toHaveCount(3);
+  await expect(target).toContainText('1:2.25');
+  await expect(leftHand).toContainText('1:2');
+  await expect(note(6).locator('xpath=..').locator('.vf-flag')).toHaveCount(0);
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect(target).toContainText('1:2.5');
+  await page.getByRole('button', { name: '重做', exact: true }).click();
+  await expect(target).toContainText('1:2.25');
 });
 
 test('missing piano samples stop playback with an explicit error and allow retry', async ({
