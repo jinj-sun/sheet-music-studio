@@ -1,4 +1,6 @@
-# 实际验证记录
+# 首轮工程验证记录（归档）
+
+> 后续已补齐全部模型并跑通真实推理。**最新状态见 [OMR-MODEL-RECOVERY.md](OMR-MODEL-RECOVERY.md)**；以下保留首轮提交 b05572a 的真实结果和失败经过，不表示当前仍缺模型。
 
 验证日期：2026-11-05（Asia/Shanghai）。Windows，Node.js 24.14.0，npm 11.9.0，TypeScript 5.9.3，Vite 8.3.5；浏览器为本机安装的 Chrome。没有把未执行的检查写成通过。
 

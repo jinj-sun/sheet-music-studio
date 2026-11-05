@@ -56,7 +56,7 @@ npm run preview
 
 ## 图片识谱模型
 
-源码包未含模型。当前机器成功下载并校验 2/7 个模型，另外 5 个因下载超时缺失，**尚未通过真实图片推理验收**。已验证实际 Worker、OpenCV 和 ONNX WASM 可初始化；没有用示例 XML 冒充识别结果。
+源码 Git/源码 ZIP 不含二进制模型。**当前机器 7/7 个模型已安装，大小与官方 SHA-256 全部通过校验**。实际 Chrome 中，开发版本约 24 秒、生产版本约 30 秒完成测试谱图的真实 WASM 推理，生成 16 个记谱音符的 MusicXML 并成功渲染；未模拟模型请求或替换识别输出。复杂谱图仍有拍号、音高、连音等误识，必须逐音符校对；这不是准确率认证。详见 [模型修复与真实推理验收](docs/OMR-MODEL-RECOVERY.md)。
 
 ```powershell
 npm run models:download
@@ -65,9 +65,29 @@ npm run models:check
 npm run build
 ```
 
-下载器沿用 homr-web 官方脚本的来源：homr 的 `onnx_checkpoints` 发布资源、RapidOCR v3.9.2 的 ModelScope 资源及 homr-web 的 tab-digits 发布资源。下载完成后按**文件大小与 SHA-256**验证，再写入正式路径；已有正确文件直接复用。每个网络请求超时 120 秒。失败会列明模型名称，不会创建假模型或输出识别乐谱。
+下载器沿用 homr-web 官方脚本的来源：homr 的 `onnx_checkpoints` 发布资源、RapidOCR v3.9.2 的 ModelScope 资源及 homr-web 的 tab-digits 发布资源。下载完成后按**文件大小与 SHA-256**验证，再写入正式路径；已有正确文件直接复用。下载器每块 1 MiB，默认 6 路分块并发、最多 3 个模型同时传输，每块失败最多重试 3 次（单次 120 秒）。已完成分块缓存在 `tmp/model-downloads/<sha256>/`，中断后重新执行可续传。最终哈希不符时只清除相应分块缓存，保留已有模型；失败不会创建假模型或输出识别乐谱。官方重定向地址只保存在内存，避免每块重复跳转。
 
 若网络不可达：在能访问这些来源的设备上运行同一命令，校验通过后将 `client/public/models/` 整个目录复制过来，再运行 `npm run models:check`。每个文件必须位于 `<sha256>/<filename>`，不要只放在 models 根目录。完整清单为 `client/src/omr/models.json`，7 个 WASM 模型合计约 190 MB。
+
+如果官方 GitHub 大文件链路较慢，可显式选择公共转发，仅转发公开模型文件 URL，仍强制验证同一个官方 SHA-256；默认不使用第三方转发。本次补齐剩余两个大模型时使用了此设置：
+
+```powershell
+$env:OMR_GITHUB_MIRROR='https://gh-proxy.com'
+npm run models:download
+Remove-Item Env:OMR_GITHUB_MIRROR
+```
+
+当前交付目录另有 `puxie-studio-omr-models-0.5.4.zip` 离线模型包及 `.sha256`。需要恢复时解压到 `client/public/models/`，使哈希目录位于 models 下，然后执行 `npm run models:check`。图片、项目和模型缓存没有提交到外部服务。
+
+真实推理回归（需先启动本地应用且模型齐全）：
+
+```powershell
+npm run test:omr
+# 可传入其他本地测试图片
+node scripts/smoke-omr.mjs C:/path/to/score.png
+```
+
+默认输入是项目中的测试谱图，成功时保存真实输出 XML、浏览器/模型后端/耗时记录和截图。它验证端到端管线，不保证音符识别正确。
 
 工作台“设置”可检查模型和真实引擎运行时。模型检查会排除 SPA HTML 回退与错误文件大小；引擎推理加载时再次验哈希。固定使用 WASM，缺少跨源隔离时为单线程；原图与推理均在浏览器处理。取消会终止 Worker，过期结果不会覆盖项目。识别成功会创建独立项目并保留完整引擎结果；请逐音符校对，不把识别输出当作已确认正确。
 
@@ -88,7 +108,7 @@ Remove-Item Env:E2E_PRODUCTION
 
 Playwright 默认使用已安装的 Chrome。改用 Edge：设置 `PW_BROWSER_CHANNEL=msedge`。不自动下载或安装浏览器。模型缺失路径在 E2E 中显式模拟 404；“真实运行时初始化”测试使用实际 Worker/ONNX/OpenCV，不模拟推理成功。
 
-真实结果与已解决失败见 [docs/VALIDATION.md](docs/VALIDATION.md)，变更见 [CHANGELOG.md](CHANGELOG.md)。
+最新模型与推理结果见 [docs/OMR-MODEL-RECOVERY.md](docs/OMR-MODEL-RECOVERY.md)，首轮工程验证与已解决失败见 [docs/VALIDATION.md](docs/VALIDATION.md)，变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 模块
 

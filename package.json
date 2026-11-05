@@ -16,7 +16,8 @@
     "test:e2e": "playwright test",
     "models:check": "node scripts/check-models.mjs",
     "omr:assets": "node scripts/copy-omr-assets.mjs",
-    "models:download": "node scripts/download-models.mjs"
+    "models:download": "node scripts/download-models.mjs",
+    "test:omr": "node scripts/smoke-omr.mjs"
   },
   "dependencies": {
     "fflate": "0.8.2",

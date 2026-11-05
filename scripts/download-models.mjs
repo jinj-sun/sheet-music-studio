@@ -1,53 +1,80 @@
 import { readFile, mkdir, writeFile, rename, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, basename } from 'node:path';
+import { dirname, basename, resolve } from 'node:path';
 import { unzipSync } from 'fflate';
+import {
+  transferArtifact,
+  discardArtifactChunks,
+  githubDownloadUrl,
+} from './model-transfer.mjs';
+
+async function validModel(path, model) {
+  try {
+    if ((await stat(path)).size !== model.bytes) return false;
+    const hash = createHash('sha256');
+    for await (const bytes of createReadStream(path)) hash.update(bytes);
+    return hash.digest('hex') === model.sha256;
+  } catch {
+    return false;
+  }
+}
+function sourceOf(filename) {
+  const ocr =
+    'https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx';
+  if (filename === 'PP-OCRv6_det_small.onnx')
+    return { url: `${ocr}/PP-OCRv6/det/${filename}` };
+  if (filename === 'PP-OCRv6_rec_small.onnx')
+    return { url: `${ocr}/PP-OCRv6/rec/${filename}` };
+  if (filename === 'ch_ppocr_mobile_v2.0_cls_mobile.onnx')
+    return { url: `${ocr}/PP-OCRv4/cls/${filename}` };
+  if (filename.startsWith('tab-digits-'))
+    return {
+      url: `https://github.com/jymen/homr-web/releases/download/models-homr0.7.0/${filename}`,
+    };
+  return {
+    zipped: true,
+    url: `https://github.com/liebharc/homr/releases/download/onnx_checkpoints/${filename.replace(/\.onnx$/, '.zip')}`,
+  };
+}
 async function main() {
   const models = JSON.parse(
     await readFile('client/src/omr/models.json', 'utf8'),
   );
-  let failures = 0;
-  for (const model of models) {
+  const concurrency = Number(process.env.OMR_DOWNLOAD_CONCURRENCY || 6);
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 12)
+    throw new Error('OMR_DOWNLOAD_CONCURRENCY must be an integer from 1 to 12');
+  let failures = 0,
+    next = 0;
+  async function install(model) {
     const path = `client/public/models/${model.path}`;
+    if (await validModel(path, model)) {
+      console.log(`Already verified ${model.id}`);
+      return;
+    }
     try {
-      try {
-        if (
-          (await stat(path)).size === model.bytes &&
-          createHash('sha256')
-            .update(await readFile(path))
-            .digest('hex') === model.sha256
-        ) {
-          console.log(`Already verified ${model.id}`);
-          continue;
-        }
-      } catch {
-        /* absent */
-      }
-      const filename = basename(model.path);
-      let url,
-        zipped = false;
-      const ocr =
-        'https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx';
-      if (filename === 'PP-OCRv6_det_small.onnx')
-        url = `${ocr}/PP-OCRv6/det/${filename}`;
-      else if (filename === 'PP-OCRv6_rec_small.onnx')
-        url = `${ocr}/PP-OCRv6/rec/${filename}`;
-      else if (filename === 'ch_ppocr_mobile_v2.0_cls_mobile.onnx')
-        url = `${ocr}/PP-OCRv4/cls/${filename}`;
-      else if (filename.startsWith('tab-digits-'))
-        url = `https://github.com/jymen/homr-web/releases/download/models-homr0.7.0/${filename}`;
-      else {
-        zipped = true;
-        url = `https://github.com/liebharc/homr/releases/download/onnx_checkpoints/${filename.replace(/\.onnx$/, '.zip')}`;
-      }
+      const filename = basename(model.path),
+        { url, zipped } = sourceOf(filename);
+      const cache = resolve('tmp/model-downloads', model.sha256);
       console.log(
-        `Downloading ${model.id} (${(model.bytes / 1e6).toFixed(1)} MB)`,
+        `Downloading ${model.id} (${(model.bytes / 1e6).toFixed(1)} MB, resumable)`,
       );
-      const response = await fetch(url, {
-        signal: AbortSignal.timeout(120000),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
-      let data = Buffer.from(await response.arrayBuffer());
+      let previousReport = 0;
+      let data = await transferArtifact(
+        githubDownloadUrl(url, process.env.OMR_GITHUB_MIRROR),
+        cache,
+        {
+          concurrency,
+          onProgress: ({ received, total, cached }) => {
+            if (Date.now() - previousReport < 1500 && received !== total)
+              return;
+            previousReport = Date.now();
+            console.log(
+              `${model.id}: ${(received / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB${cached ? ' (resumed)' : ''}`,
+            );
+          },
+        },
+      );
       if (zipped) {
         const files = unzipSync(data, {
           filter: (entry) =>
@@ -60,23 +87,35 @@ async function main() {
       if (
         data.length !== model.bytes ||
         createHash('sha256').update(data).digest('hex') !== model.sha256
-      )
-        throw new Error(`Integrity check failed; existing model preserved`);
+      ) {
+        await discardArtifactChunks(cache);
+        throw new Error(
+          'Integrity check failed; cached ranges cleared, existing model preserved',
+        );
+      }
       await mkdir(dirname(path), { recursive: true });
       await writeFile(`${path}.download`, data);
       await rename(`${path}.download`, path);
       console.log(`Verified ${model.id}`);
     } catch (error) {
       failures++;
-      console.error(`FAILED ${model.id}: ${error.message}`);
+      console.error(
+        `FAILED ${model.id}: ${error.message}. Retry resumes completed ranges under tmp/model-downloads.`,
+      );
     }
   }
+  // Bounded model concurrency also uses both official hosts while a large file is slow.
+  const ordered = [...models].sort((a, b) => a.bytes - b.bytes);
+  async function worker() {
+    while (next < ordered.length) await install(ordered[next++]);
+  }
+  await Promise.all(Array.from({ length: 3 }, worker));
   if (failures) {
     console.error(
-      `${failures} model downloads failed. Retry this command or copy files from another machine; verified files will be reused.`,
+      `${failures} model downloads failed. Verified files and completed chunks are retained.`,
     );
     process.exitCode = 1;
-  }
+  } else console.log(`All ${models.length} models verified.`);
 }
 main().catch((error) => {
   console.error(error.message);

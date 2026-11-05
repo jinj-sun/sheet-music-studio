@@ -1,0 +1,13 @@
+{
+  "verifiedAt": "2026-11-05T02:31:30.004Z",
+  "input": "reference.png",
+  "inputSha256": "c69a798d3a9772c583a4425ab8cbcc1fa021332886a0caf76ccdec2b956dc121",
+  "browser": "156.0.8078.80",
+  "backend": "wasm",
+  "elapsedMs": 30430,
+  "notes": 16,
+  "staves": 2,
+  "pageErrors": [],
+  "source": "Actual homr-web inference; no mocked model requests or substituted MusicXML",
+  "accuracy": "Pipeline smoke test on a generated test-score image; musical accuracy is not certified"
+}
